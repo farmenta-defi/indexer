@@ -249,11 +249,11 @@ describe("loan handlers", () => {
       ]);
     });
 
-    it("a redeposit starts the loan over; the earlier custody stays in `loan_activity`", async () => {
+    it("a redeposit by another owner starts the loan over; the earlier custody stays in `loan_activity`", async () => {
       const { db, rows, at } = await deposited();
       await onBorrow(db, at({ tokenId: 7n, amount: 300_000_000n }, BLUE_CHIP)); // 5
       await onRepay(db, at({ tokenId: 7n, amount: 300_000_001n }, BLUE_CHIP)); // 6
-      await onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE }, BLUE_CHIP)); // 7
+      await onCollateralWithdrawn(db, at({ tokenId: 7n, owner: getAddress(ALICE) }, BLUE_CHIP)); // 7
       await onTransfer(db, at({ from: BLUE_CHIP, to: BOB, tokenId: 7n })); // 8
       await onTransfer(db, at({ from: BOB, to: BLUE_CHIP, tokenId: 7n })); // 9
       await onCollateralDeposited(db, at({ tokenId: 7n, owner: BOB }, BLUE_CHIP)); // 10
@@ -270,6 +270,14 @@ describe("loan handlers", () => {
           { kind: "withdraw", owner: ALICE },
           { kind: "deposit", owner: BOB },
         ],
+      );
+      // `depositedBlock` cuts the history per custody: Alice's rows are all before it.
+      const { depositedBlock } = rows(schema.loan)[0] as { depositedBlock: bigint };
+      assert.deepEqual(
+        rows(schema.loanActivity)
+          .filter((row) => (row.blockNumber as bigint) >= depositedBlock)
+          .map(({ kind, owner }) => ({ kind, owner })),
+        [{ kind: "deposit", owner: BOB }],
       );
     });
 

@@ -7,8 +7,9 @@ import { onDeposit, onShareTransfer, onWithdraw } from "../src/handlers/vault.ts
 import { blockOf, chain, logIndexOf, nextLog, timeOf, txOf } from "./support/events.ts";
 import { fakeDb } from "./support/fakeDb.ts";
 
-const MARKET: Address = "0x00000000000000000000000000000000000b10e0";
-const OTHER_MARKET: Address = "0x000000000000000000000000000000000000e3e0";
+// MARKET's checksummed spelling differs from this one (…00E3e0); the other's does not.
+const MARKET: Address = "0x000000000000000000000000000000000000e3e0";
+const OTHER_MARKET: Address = "0x00000000000000000000000000000000000b10e0";
 const ALICE: Address = "0x00000000000000000000000000000000000a11ce";
 const BOB: Address = "0x0000000000000000000000000000000000000b0b";
 const ROUTER: Address = "0x0000000000000000000000000000000000000123";
@@ -66,7 +67,7 @@ describe("vault handlers", () => {
 
     it("a share transfer moves both balances and is an activity of its own", async () => {
       const { db, rows, at } = await depositedForAlice();
-      await onShareTransfer(db, at({ from: getAddress(ALICE), to: getAddress(BOB), value: 90n }, MARKET));
+      await onShareTransfer(db, at({ from: getAddress(ALICE), to: getAddress(BOB), value: 90n }, getAddress(MARKET)));
 
       assert.deepEqual(rows(schema.vaultActivity).at(-1), {
         ...logRow(2),
@@ -88,8 +89,8 @@ describe("vault handlers", () => {
       await onShareTransfer(db, at({ from: zeroAddress, to: ALICE, value: 5n }, OTHER_MARKET));
 
       assert.deepEqual(rows(schema.vaultBalance), [
-        { market: OTHER_MARKET, account: ALICE, shares: 5n, updatedAt: timeOf(2) },
         { market: MARKET, account: ALICE, shares: 990n, updatedAt: timeOf(1) },
+        { market: OTHER_MARKET, account: ALICE, shares: 5n, updatedAt: timeOf(2) },
       ]);
     });
   });

@@ -85,6 +85,20 @@ before(async () => {
   await onShareTransfer(db, at({ from: zeroAddress, to: ALICE, value: 500n }, MEME));
   await onShareTransfer(db, at({ from: ALICE, to: BOB, value: 120n }, MEME));
 
+  // A blue-chip loan with a smaller tokenId than every meme loan: Bob's 5. (41 to 44)
+  await mint(5n, BOB, BLUE_POOL);
+  await deposit(5n, BOB, BLUE_CHIP);
+
+  // 15 changes hands between two custodies: Alice deposits, borrows, repays and withdraws it
+  // to Bob, who deposits it in the same market. (45 to 54)
+  await mint(15n, ALICE, MEME_POOL);
+  await deposit(15n, ALICE, MEME);
+  await onBorrow(db, at({ tokenId: 15n, amount: 3_000_000n }, MEME));
+  await onRepay(db, at({ tokenId: 15n, amount: 3_000_001n }, MEME));
+  await onCollateralWithdrawn(db, at({ tokenId: 15n, owner: ALICE }, MEME));
+  await onTransfer(db, at({ from: MEME, to: BOB, tokenId: 15n }));
+  await deposit(15n, BOB, MEME);
+
   app = createApp(await pgDb(rows), schema);
 });
 
@@ -138,19 +152,36 @@ describe("api", () => {
 
       const bob = await get(`/portfolio/${BOB}`);
       assert.deepEqual(tokenIds(bob.body.positions), ["2"]);
-      assert.deepEqual(tokenIds(bob.body.loans), ["21"]);
+      assert.deepEqual(tokenIds(bob.body.loans), ["15", "5", "21"]);
     });
 
-    it("/loans filters by owner, market and status, in market and tokenId order", async () => {
-      // MEME (0x…00e3e0) sorts before BLUE_CHIP (0x…0b10e0).
-      assert.deepEqual(tokenIds((await get("/loans")).body), ["11", "12", "13", "14", "21"]);
-      assert.deepEqual(tokenIds((await get("/loans?status=in_custody")).body), ["11", "12", "14", "21"]);
+    it("/loans filters by owner, market and status, in market and then tokenId order", async () => {
+      // MEME (0x…00e3e0) sorts before BLUE_CHIP (0x…0b10e0), so 5 comes after 15: by tokenId
+      // alone it would come first.
+      assert.deepEqual(tokenIds((await get("/loans")).body), ["11", "12", "13", "14", "15", "5", "21"]);
+      assert.deepEqual(tokenIds((await get("/loans?status=in_custody")).body), ["11", "12", "14", "15", "5", "21"]);
+      assert.deepEqual(tokenIds((await get(`/loans?market=${BLUE_CHIP}`)).body), ["5", "21"]);
+      assert.deepEqual(tokenIds((await get(`/loans?market=${MEME}`)).body), ["11", "12", "13", "14", "15"]);
       assert.deepEqual(tokenIds((await get(`/loans?market=${MEME}&status=withdrawn`)).body), ["13"]);
-      assert.deepEqual(tokenIds((await get(`/loans?owner=${BOB}`)).body), ["21"]);
+      assert.deepEqual(tokenIds((await get(`/loans?owner=${BOB}`)).body), ["15", "5", "21"]);
+      assert.deepEqual(tokenIds((await get(`/loans?owner=${BOB}&market=${BLUE_CHIP}`)).body), ["5", "21"]);
+    });
+
+    it("a loan redeposited by another owner is the new owner's only: `/loans` holds the latest custody", async () => {
+      // Alice borrowed against 15 and repaid it; none of that is on the row any more.
+      assert.deepEqual(tokenIds((await get(`/loans?owner=${ALICE}`)).body), ["11", "12", "13", "14"]);
+      const [loan] = (await get(`/loans?owner=${BOB}&market=${MEME}`)).body;
+      assert.deepEqual(
+        { tokenId: loan.tokenId, owner: loan.owner, status: loan.status, everBorrowed: loan.everBorrowed, borrowedUsdg: loan.borrowedUsdg, repaidUsdg: loan.repaidUsdg },
+        { tokenId: "15", owner: BOB, status: "in_custody", everBorrowed: false, borrowedUsdg: "0", repaidUsdg: "0" },
+      );
+      // So it is not a keeper candidate, although the tokenId once borrowed.
+      assert.ok(!tokenIds((await get("/loans/keeper-candidates")).body).includes("15"));
     });
 
     it("an address is accepted in any case", async () => {
-      assert.deepEqual(tokenIds((await get(`/loans?owner=${getAddress(BOB)}`)).body), ["21"]);
+      assert.deepEqual(tokenIds((await get(`/loans?owner=${getAddress(BOB)}`)).body), ["15", "5", "21"]);
+      assert.deepEqual(tokenIds((await get(`/loans?market=${getAddress(MEME)}&status=withdrawn`)).body), ["13"]);
       assert.deepEqual(tokenIds((await get(`/portfolio/${getAddress(BOB)}`)).body.positions), ["2"]);
     });
 

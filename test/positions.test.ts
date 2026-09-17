@@ -92,6 +92,8 @@ describe("position handlers", () => {
           .map((row) => row.tokenId);
       assert.deepEqual(heldBy(ALICE), [1n, 3n]);
       assert.deepEqual(heldBy(BOB), [2n]);
+      // A plain transfer moves `updatedAt` too; the mint of 2 was events 3 and 4.
+      assert.equal(rows(schema.position).find((row) => row.tokenId === 2n)?.updatedAt, timeOf(7));
       assert.deepEqual(
         rows(schema.positionTransfer).filter((row) => row.tokenId === 2n),
         [transferRow(3, 2n, zeroAddress, ALICE), transferRow(7, 2n, ALICE, BOB)],
