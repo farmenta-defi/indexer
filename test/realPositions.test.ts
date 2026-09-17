@@ -32,8 +32,9 @@ const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 // ETH/USDG, no hook, fee 460 (spec §18).
 const POOL = "0x54f7883914619af9105355bf83ed678bcf9f63560218ac61c9963b9503d0ba32";
 
-async function replay(tokenId: number) {
-  const logs = JSON.parse(readFileSync(join(FIXTURES, `position-${tokenId}.json`), "utf8")) as RawLog[];
+async function replay(tokenId: number, keep: (log: RawLog, i: number) => boolean = () => true) {
+  const all = JSON.parse(readFileSync(join(FIXTURES, `position-${tokenId}.json`), "utf8")) as RawLog[];
+  const logs = all.filter(keep);
   const { db, rows } = fakeDb();
   for (const log of logs) {
     const event = {
@@ -93,6 +94,23 @@ describe("real fixture positions", () => {
           updatedAt: 1_788_514_268n,
         },
       ]);
+    });
+  });
+
+  describe("negative", () => {
+    it("without the mint's `Transfer`, the real `ModifyLiquidity` logs alone make no position", async () => {
+      const { logs, rows } = await replay(1_621_020, (log) => log.address === UNISWAP.poolManager.address);
+      assert.equal(logs.length, 2);
+      assert.deepEqual(rows, []);
+    });
+  });
+
+  describe("edge case", () => {
+    it("the real fee collection is a zero delta: liquidity as at the mint, only `updatedAt` moves", async () => {
+      const atMint = await replay(1_621_020, (_, i) => i < 2);
+      const afterCollect = await replay(1_621_020);
+      assert.deepEqual(afterCollect.rows, [{ ...atMint.rows[0], updatedAt: 1_788_514_073n }]);
+      assert.equal(atMint.rows[0]?.updatedAt, 1_788_434_653n);
     });
   });
 });
