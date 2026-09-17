@@ -23,3 +23,8 @@ export function chain() {
     };
   };
 }
+
+/** The log right after `previous` in the same transaction, as consecutive `emit`s produce. */
+export function nextLog<Args>(previous: Log<unknown>, args: Args, emitter: Address = previous.log.address): Log<Args> {
+  return { ...previous, args, log: { logIndex: previous.log.logIndex + 1, address: emitter } };
+}

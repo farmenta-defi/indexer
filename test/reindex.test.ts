@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { numberToHex, zeroAddress, type Hex } from "viem";
+import { numberToHex, zeroAddress, type Address, type Hex } from "viem";
 
 import { UNISWAP } from "../config/uniswap.ts";
 
@@ -15,11 +15,17 @@ import {
   onPoolTermsUpdated,
   onTokenConfigured,
 } from "../src/handlers/collateralPolicy.ts";
-import { onBorrow, onCollateralDeposited, onRepay } from "../src/handlers/farmentaMarket.ts";
+import {
+  onBadDebtSocialized,
+  onBorrow,
+  onCollateralDeposited,
+  onLiquidate,
+  onRepay,
+} from "../src/handlers/farmentaMarket.ts";
 import { onInitialize, onModifyLiquidity } from "../src/handlers/poolManager.ts";
 import { onTransfer } from "../src/handlers/positionManager.ts";
 import { onRecorded } from "../src/handlers/twapRecorder.ts";
-import { chain } from "./support/events.ts";
+import { chain, nextLog } from "./support/events.ts";
 import { fakeDb } from "./support/fakeDb.ts";
 
 // FAR-34: "a reindex from zero gives identical tables, without a single eth_call".
@@ -32,9 +38,10 @@ const HOOK = "0x78257a554194c3ba10a59357b500788934f34080";
 // ETH/USDG fee 500 and fee 460 on Robinhood Chain; ids as pinned in test/poolKey.test.ts.
 const LISTED_ID: Hex = "0x387bf619da4d3fb62bb276482693dba1b9b3520f573cabdfe033384a24125982";
 const UNLISTED_ID = "0x54f7883914619af9105355bf83ed678bcf9f63560218ac61c9963b9503d0ba32";
-const ALICE = "0x00000000000000000000000000000000000a11ce";
-const BOB = "0x0000000000000000000000000000000000000b0b";
-const MARKET = "0x00000000000000000000000000000000000b10e0";
+const ALICE: Address = "0x00000000000000000000000000000000000a11ce";
+const BOB: Address = "0x0000000000000000000000000000000000000b0b";
+const KEEPER: Address = "0x00000000000000000000000000000000000cee9e";
+const MARKET: Address = "0x00000000000000000000000000000000000b10e0";
 const tx = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
 
 /** One of each event, in an order the contracts allow. */
@@ -76,6 +83,16 @@ async function replay() {
   await onCollateralDeposited(db, at({ tokenId: 7n, owner: BOB }, MARKET)); // 20
   await onBorrow(db, at({ tokenId: 7n, amount: 300_000_000n }, MARKET)); // 21
   await onRepay(db, at({ tokenId: 7n, amount: 100_000_000n }, MARKET)); // 22
+
+  // One transaction, a full liquidation: the burn, its removal, the loss, `Liquidate`.
+  const burn = at({ from: MARKET, to: zeroAddress, tokenId: 7n }); // 23
+  await onTransfer(db, burn);
+  const removal = nextLog(burn, liquidity(7n, -1_250n));
+  await onModifyLiquidity(db, removal);
+  const loss = nextLog(removal, { amount: 4_000_000n }, MARKET);
+  await onBadDebtSocialized(db, loss);
+  const liquidate = { tokenId: 7n, liquidator: KEEPER, repaid: 190_000_000n, out0: 9n, out1: 199_500_000n, badDebt: 10_000_000n };
+  await onLiquidate(db, nextLog(loss, liquidate));
   return dump();
 }
 
@@ -191,15 +208,15 @@ const EXPECTED = {
   position: [
     {
       tokenId: 7n,
-      owner: MARKET,
+      owner: zeroAddress,
       poolId: LISTED_ID,
       tickLower: -198_020,
       tickUpper: -197_970,
-      liquidity: 1_250n,
-      burned: false,
+      liquidity: 0n,
+      burned: true,
       mintedBlock: 111n,
       mintedAt: 1_000_111n,
-      updatedAt: 1_000_119n,
+      updatedAt: 1_000_123n,
     },
     {
       tokenId: 8n,
@@ -218,6 +235,7 @@ const EXPECTED = {
     { tokenId: 7n, blockNumber: 111n, logIndex: 21, timestamp: 1_000_111n, transactionHash: tx(11), from: zeroAddress, to: ALICE },
     { tokenId: 7n, blockNumber: 114n, logIndex: 24, timestamp: 1_000_114n, transactionHash: tx(14), from: ALICE, to: BOB },
     { tokenId: 7n, blockNumber: 119n, logIndex: 29, timestamp: 1_000_119n, transactionHash: tx(19), from: BOB, to: MARKET },
+    { tokenId: 7n, blockNumber: 123n, logIndex: 33, timestamp: 1_000_123n, transactionHash: tx(23), from: MARKET, to: zeroAddress },
     { tokenId: 8n, blockNumber: 115n, logIndex: 25, timestamp: 1_000_115n, transactionHash: tx(15), from: zeroAddress, to: ALICE },
     { tokenId: 8n, blockNumber: 117n, logIndex: 27, timestamp: 1_000_117n, transactionHash: tx(17), from: ALICE, to: zeroAddress },
   ],
@@ -227,15 +245,15 @@ const EXPECTED = {
       tokenId: 7n,
       owner: BOB,
       poolId: LISTED_ID,
-      status: "in_custody",
+      status: "liquidated",
       everBorrowed: true,
       borrowedUsdg: 300_000_000n,
       repaidUsdg: 100_000_000n,
-      liquidatedUsdg: 0n,
+      liquidatedUsdg: 190_000_000n,
       depositedBlock: 120n,
       depositedAt: 1_000_120n,
-      lastActivityAt: 1_000_122n,
-      closedAt: null,
+      lastActivityAt: 1_000_123n,
+      closedAt: 1_000_123n,
     },
   ],
   loan_activity: [
@@ -243,6 +261,24 @@ const EXPECTED = {
     { ...activity(21), tokenId: 7n, owner: BOB, kind: "borrow", amountUsdg: 300_000_000n },
     { ...activity(22), tokenId: 7n, owner: BOB, kind: "repay", amountUsdg: 100_000_000n },
   ],
+  // Logs 33 to 36 of the transaction opened by event 23.
+  liquidation: [
+    {
+      ...activity(23),
+      logIndex: 36,
+      tokenId: 7n,
+      owner: BOB,
+      poolId: LISTED_ID,
+      liquidator: KEEPER,
+      full: true,
+      repaidUsdg: 190_000_000n,
+      badDebtUsdg: 10_000_000n,
+      socializedUsdg: 4_000_000n,
+      out0: 9n,
+      out1: 199_500_000n,
+    },
+  ],
+  bad_debt_socialized: [{ ...activity(23), logIndex: 35, amountUsdg: 4_000_000n }],
 };
 
 function sourceFiles(dir: string): string[] {
