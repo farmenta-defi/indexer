@@ -97,7 +97,7 @@ identical rows.
 | `position` | PositionManager `Transfer`, PoolManager `ModifyLiquidity` | Every position NFT on the chain: holder, pool, ticks, liquidity, `burned` |
 | `position_transfer` | PositionManager `Transfer` | Every transfer, mint and burn included |
 | `loan` | FarmentaMarket `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `Liquidate`; PositionManager `Transfer` to zero | One row per market and tokenId: depositor, pool, `status`, `everBorrowed`, running totals |
-| `loan_activity` | `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay` | The borrower side of the transaction history |
+| `loan_activity` | `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `LiquidityChanged`, `CollectFees` | The borrower side of the transaction history |
 | `liquidation` | `Liquidate`, `BadDebtSocialized` | One row per liquidation, partial or full |
 | `bad_debt_socialized` | `BadDebtSocialized` | Every loss written off against lenders |
 | `vault_activity` | ERC-4626 `Deposit`, `Withdraw`, share `Transfer` | The lender side of the transaction history |
@@ -149,6 +149,17 @@ totals of event amounts for the current custody; their difference is not the deb
 
 `loan.poolId` is copied from `position` when the position is deposited, because
 `CollateralDeposited` does not carry it yet (FAR-42).
+
+`LiquidityChanged` and `CollectFees` are history rows in `loan_activity` and nothing more. A
+position's liquidity always comes from the PoolManager's `ModifyLiquidity`, which also sees the
+partial liquidations and the burn that emit no `LiquidityChanged`. Both events already carry
+`poolId`; it must agree with the one taken from `position`, or the indexer stops.
+
+**`collect_fees` rows are not fee income.** `amount0`/`amount1` are `to`'s balance change across
+the claim (contract NatSpec), and the fees claimed inside `increaseLiquidity` and
+`decreaseLiquidity` emit no `CollectFees` at all (spec §4.1, v0.48): from events they are only
+visible as a `ModifyLiquidity`, which does not say how much was paid out. Fee income per
+position cannot be rebuilt here until the contracts emit it.
 
 ### Liquidations
 
