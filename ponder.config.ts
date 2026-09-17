@@ -37,10 +37,26 @@ const markets = Object.values(deployment?.markets ?? {});
 // zero address from "latest": no code lives there, so it never emits a log.
 const NONE: Address[] = [zeroAddress];
 
+// The indexer shares a Postgres server with lp-monitor-v2 and must only ever use database
+// `farmenta` (spec §13). The role is locked out of `lpmon` on the server as well
+// (scripts/create-db-role.sql); this catches the mistake before a connection is made.
+// The URL holds a password, so the error never echoes it.
+function farmentaDatabaseUrl(): string {
+  const url = requireEnv("DATABASE_URL");
+  let database: string;
+  try {
+    database = decodeURIComponent(new URL(url).pathname.slice(1));
+  } catch {
+    throw new Error("DATABASE_URL is not a valid postgres:// URL");
+  }
+  if (database !== "farmenta") throw new Error(`DATABASE_URL must point at database "farmenta", not "${database}"`);
+  return url;
+}
+
 export default createConfig({
   database: {
     kind: "postgres",
-    connectionString: requireEnv("DATABASE_URL"),
+    connectionString: farmentaDatabaseUrl(),
   },
   chains: {
     robinhood: {

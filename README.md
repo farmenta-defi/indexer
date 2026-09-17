@@ -53,6 +53,9 @@ issue, a commit message or the pm2 process file. `.env.example` describes the sh
 value. The Docker database has no built-in password either: `pnpm db:up` refuses to start
 until `POSTGRES_PASSWORD` is set in `.env`.
 
+`DATABASE_URL` must name database `farmenta`; the config refuses anything else, so a pasted
+lp-monitor-v2 URL fails at startup instead of writing into `lpmon`.
+
 **RPC.** `PONDER_RPC_URL` is required and has no fallback, on purpose. Alchemy's free tier
 caps `eth_getLogs` at 10 blocks — about one second of this chain — and the public RPC
 answers 429 (spec §13, §14), so neither can backfill from block 9,070. With a free-tier key
