@@ -1,3 +1,8 @@
+import { realpathSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import * as schema from "../../ponder.schema.ts";
 import type { Db } from "../../src/handlers/event.ts";
 
@@ -5,19 +10,30 @@ import type { Db } from "../../src/handlers/event.ts";
 // lean on: `insert` refuses a duplicate primary key, `update` refuses a missing row, and
 // `find` answers null. It has no `client`, so a handler cannot make an `eth_call` here.
 
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
+
 type Row = Record<string, unknown>;
 type Patch = Row | ((row: any) => Row);
 
-const PRIMARY_KEYS = new Map<object, string[]>([
-  [schema.uniswapPool, ["id"]],
-  [schema.pool, ["id"]],
-  [schema.poolTermsChange, ["poolId", "blockNumber", "logIndex"]],
-  [schema.ltRamp, ["poolId", "blockNumber", "logIndex"]],
-  [schema.token, ["currency"]],
-  [schema.hook, ["address"]],
-  [schema.twapObservation, ["poolId", "timestamp"]],
-  [schema.twapPool, ["poolId"]],
-]);
+// Primary keys come from the schema itself, through the drizzle that Ponder depends on, so
+// a key changed in ponder.schema.ts changes here too. pnpm does not link drizzle at the root.
+const ponderRequire = createRequire(join(realpathSync(join(ROOT, "node_modules/ponder")), "package.json"));
+const { getTableConfig } = ponderRequire("drizzle-orm/pg-core") as {
+  getTableConfig: (table: object) => {
+    name: string;
+    columns: { name: string; primary: boolean }[];
+    primaryKeys: { columns: { name: string }[] }[];
+  };
+};
+
+const TABLES = Object.values(schema).map((table) => {
+  const config = getTableConfig(table);
+  // Rows are keyed by property name (`poolId`), the config by column name (`pool_id`).
+  const property = new Map(Object.entries(table).map(([key, column]) => [(column as { name: string }).name, key]));
+  const columns = config.primaryKeys[0]?.columns ?? config.columns.filter((column) => column.primary);
+  return { table: table as object, name: config.name, primaryKey: columns.map((column) => property.get(column.name)!) };
+});
+const PRIMARY_KEYS = new Map(TABLES.map(({ table, primaryKey }) => [table, primaryKey]));
 
 export function fakeDb() {
   const tables = new Map<object, Map<string, Row>>();
@@ -32,6 +48,9 @@ export function fakeDb() {
     return columns.map((column) => String(row[column])).join("|");
   };
   const apply = (row: Row, patch: Patch) => ({ ...row, ...(typeof patch === "function" ? patch(row) : patch) });
+
+  const sorted = (rows: Map<string, Row>) =>
+    [...rows.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, row]) => row);
 
   const db = {
     insert: (table: object) => ({
@@ -72,8 +91,8 @@ export function fakeDb() {
   return {
     db: db as unknown as Db,
     /** Rows of a table, in primary-key order. */
-    rows: (table: object) => [...rowsOf(table).entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, row]) => row),
-    /** Every table's rows: what a reindex must reproduce. */
-    dump: () => [...PRIMARY_KEYS.keys()].map((table) => [...rowsOf(table).entries()].sort(([a], [b]) => a.localeCompare(b))),
+    rows: (table: object) => sorted(rowsOf(table)),
+    /** Every table's rows by SQL name: what a reindex must reproduce. */
+    dump: () => Object.fromEntries(TABLES.map(({ table, name }) => [name, sorted(rowsOf(table))])),
   };
 }
