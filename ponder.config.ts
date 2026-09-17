@@ -71,6 +71,8 @@ export default createConfig({
       abi: poolManagerAbi,
       address: UNISWAP.poolManager.address,
       startBlock: from(UNISWAP.poolManager.startBlock),
+      // Only liquidity that belongs to a position NFT (FAR-35). `Initialize` stays unfiltered.
+      filter: { event: "ModifyLiquidity", args: { sender: UNISWAP.positionManager.address } },
     },
     PositionManager: {
       chain: "robinhood",

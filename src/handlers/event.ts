@@ -1,5 +1,5 @@
 import type { Context } from "ponder:registry";
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
 
 // The slice of Ponder's handler arguments the indexing functions use. They take the store
 // and nothing else from the context, so none of them can reach `context.client`: every
@@ -9,6 +9,19 @@ export type Db = Context["db"];
 export type Log<Args> = {
   args: Args;
   block: { number: bigint; timestamp: bigint };
-  log: { logIndex: number };
+  // `address` is the emitting contract: what tells the two markets apart (ponder.config.ts).
+  log: { logIndex: number; address: Address };
   transaction: { hash: Hex };
 };
+
+/** Addresses as the tables key them. A decoded event argument is checksummed, `log.address` is not. */
+export const lower = (address: Address) => address.toLowerCase() as Address;
+
+/** Key and provenance of a row that is one log of a market: both markets share every table. */
+export const marketLogKey = (event: Log<unknown>) => ({
+  market: lower(event.log.address),
+  blockNumber: event.block.number,
+  logIndex: event.log.logIndex,
+  timestamp: event.block.timestamp,
+  transactionHash: event.transaction.hash,
+});

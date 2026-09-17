@@ -1,4 +1,4 @@
-import type { Hex } from "viem";
+import { zeroAddress, type Address, type Hex } from "viem";
 
 import type { Log } from "../../src/handlers/event.ts";
 
@@ -10,16 +10,21 @@ export const timeOf = (n: number) => 1_000_100n + BigInt(n);
 export const logIndexOf = (n: number) => 10 + n;
 export const txOf = (n: number) => `0x${n.toString(16).padStart(64, "0")}` as Hex;
 
-/** A source of events in chain order. */
+/** A source of events in chain order. `emitter` is the contract the log comes from. */
 export function chain() {
   let n = 0;
-  return <Args>(args: Args): Log<Args> => {
+  return <Args>(args: Args, emitter: Address = zeroAddress): Log<Args> => {
     n += 1;
     return {
       args,
       block: { number: blockOf(n), timestamp: timeOf(n) },
-      log: { logIndex: logIndexOf(n) },
+      log: { logIndex: logIndexOf(n), address: emitter },
       transaction: { hash: txOf(n) },
     };
   };
+}
+
+/** The log right after `previous` in the same transaction, as consecutive `emit`s produce. */
+export function nextLog<Args>(previous: Log<unknown>, args: Args, emitter: Address = previous.log.address): Log<Args> {
+  return { ...previous, args, log: { logIndex: previous.log.logIndex + 1, address: emitter } };
 }
