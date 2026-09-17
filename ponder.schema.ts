@@ -1,7 +1,7 @@
 import { index, onchainTable, primaryKey } from "ponder";
 
 // Every table is written from events alone, never from an `eth_call`, so a reindex from
-// zero rebuilds the same rows (FAR-34). Positions, loans and liquidations arrive in FAR-35.
+// zero rebuilds the same rows (FAR-34, FAR-35).
 
 // Every pool ever initialized on the PoolManager, listed by Farmenta or not. It exists only
 // because `PoolListed` does not carry the PoolKey: currencies, fee, tick spacing and hooks
@@ -147,3 +147,49 @@ export const twapPool = onchainTable("twap_pool", (t) => ({
   // the ring-buffer capacity (2048): that one is `min(recordedCount, 2048)`.
   recordedCount: t.integer().notNull(),
 }));
+
+// Every position NFT ever minted by the PositionManager, in a Farmenta pool or not, since its
+// deploy block: `PositionManager` has no `ERC721Enumerable` (spec §12), and a position that
+// becomes collateral was usually minted long before.
+export const position = onchainTable(
+  "position",
+  (t) => ({
+    tokenId: t.bigint().primaryKey(),
+    // Holder of the NFT: the market while the position is collateral (the depositor is
+    // `loan.owner`), the zero address once burned.
+    owner: t.hex().notNull(),
+    // From `ModifyLiquidity`, which the PositionManager salts with the tokenId. Null only
+    // between a mint's `Transfer` and its `ModifyLiquidity`, a few logs later in the same
+    // transaction.
+    poolId: t.hex(),
+    tickLower: t.integer(),
+    tickUpper: t.integer(),
+    // Sum of every `liquidityDelta`: what `getPositionLiquidity` returns.
+    liquidity: t.bigint().notNull(),
+    burned: t.boolean().notNull(),
+    mintedBlock: t.bigint().notNull(),
+    mintedAt: t.bigint().notNull(),
+    updatedAt: t.bigint().notNull(),
+  }),
+  (table) => ({
+    ownerIdx: index().on(table.owner),
+    poolIdx: index().on(table.poolId),
+  }),
+);
+
+// One row per PositionManager `Transfer`, mint and burn included: who held a position when.
+export const positionTransfer = onchainTable(
+  "position_transfer",
+  (t) => ({
+    tokenId: t.bigint().notNull(),
+    blockNumber: t.bigint().notNull(),
+    logIndex: t.integer().notNull(),
+    timestamp: t.bigint().notNull(),
+    transactionHash: t.hex().notNull(),
+    from: t.hex().notNull(),
+    to: t.hex().notNull(),
+  }),
+  (table) => ({
+    pk: primaryKey({ columns: [table.tokenId, table.blockNumber, table.logIndex] }),
+  }),
+);

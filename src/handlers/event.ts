@@ -13,3 +13,6 @@ export type Log<Args> = {
   log: { logIndex: number; address: Address };
   transaction: { hash: Hex };
 };
+
+/** Addresses as the tables key them. A decoded event argument is checksummed, `log.address` is not. */
+export const lower = (address: Address) => address.toLowerCase() as Address;
