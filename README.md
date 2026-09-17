@@ -12,9 +12,8 @@ only exists here, rebuilt from events. It does **not** compute health factors an
 call contracts: HF moves with every price tick without any event, and a Ponder reindex
 replays every `eth_call` (spec §13). HF belongs to the backend and the keeper.
 
-> **Status: pools and listings (FAR-34).** Listed pools with their PoolKey, terms history,
-> freeze, LT ramp, tokens, hooks and TWAP observations. Positions, loans and liquidations
-> arrive in FAR-35.
+> **Status: pools and listings (FAR-34); positions, loans, liquidations and vault activity
+> (FAR-35).** Exact debt and HF are not here and cannot be: see [Loans](#loans).
 
 ## Layout
 
@@ -26,10 +25,11 @@ replays every `eth_call` (spec §13). HF belongs to the backend and the keeper.
 | `abis/` | Event ABIs, **generated** — see [Regenerating ABIs](#regenerating-abis) |
 | `abis/source.json` | The `smart-contract` commit the ABIs were built from |
 | `ponder.schema.ts` | Tables — see [Tables](#tables) |
-| `src/PoolManager.ts`, `src/CollateralPolicy.ts`, `src/TwapRecorder.ts` | Registers the indexing functions with Ponder, one file per contract |
+| `src/PoolManager.ts`, `src/PositionManager.ts`, `src/CollateralPolicy.ts`, `src/TwapRecorder.ts`, `src/FarmentaMarket.ts` | Registers the indexing functions with Ponder, one file per contract |
 | `src/handlers/` | What those functions do. They receive the store and nothing else, so they cannot make an `eth_call`, and `pnpm test` runs them against an in-memory store |
 | `src/lib/` | Pure helpers (pool id, LT ramp, API view), unit-tested without Ponder |
-| `src/api/index.ts` | HTTP routes on top of Ponder's built-in ones — see [Queries](#queries) |
+| `src/api/app.ts`, `src/api/index.ts` | HTTP routes on top of Ponder's built-in ones — see [Queries](#queries). `app.ts` holds the routes and takes the store as an argument, so `pnpm test` runs them against an in-memory Postgres; `index.ts` hands it Ponder's |
+| `test/fixtures/` | Real logs of fixture positions (spec §14, §18), replayed by `test/realPositions.test.ts` |
 | `scripts/create-db-role.sql` | Database and role on the shared Postgres server |
 | `ecosystem.config.cjs` | pm2 process file |
 
@@ -64,9 +64,12 @@ caps `eth_getLogs` at 10 blocks — about one second of this chain — and the p
 answers 429 (spec §13, §14), so neither can backfill from block 9,070. With a free-tier key
 you can still run the indexer locally by setting `START_BLOCK_FLOOR` to a recent block, which
 lifts every start block; expect 429 warnings while it catches up. Never set it in production.
-Keep the floor at or below the block `CollateralPolicy` was deployed in: a `PoolTermsUpdated`,
-`PoolFrozen` or `LtRampScheduled` for a pool whose `PoolListed` was skipped stops the indexer,
-because a row that cannot be right is worse than no row.
+Keep the floor at or below the block the first Farmenta contract was deployed in: a
+`PoolTermsUpdated`, `PoolFrozen` or `LtRampScheduled` for a pool whose `PoolListed` was skipped,
+or a `Borrow`, `Repay` or `Liquidate` for a loan whose `CollateralDeposited` was skipped, stops
+the indexer, because a row that cannot be right is worse than no row. Positions are the
+exception, as their mints go back to block 9,073: one minted before the floor is left out
+silently, and a loan on it has a null `poolId`, so it never shows up as a keeper candidate.
 
 **Farmenta addresses.** None is written in code: mainnet is not deployed yet (FAR-23), and
 a fork or redeploy moves all of them. Copy `deployments/example.json` to
@@ -91,6 +94,14 @@ identical rows.
 | `token`, `hook` | `TokenConfigured`, `HookAllowlisted` | Latest config per currency and per hook (owner console, FAR-41) |
 | `twap_observation` | TwapRecorder `Recorded` | One row per observation, keyed by pool and timestamp |
 | `twap_pool` | `Recorded` | Newest observation per pool: `last_observation_at` |
+| `position` | PositionManager `Transfer`, PoolManager `ModifyLiquidity` | Every position NFT on the chain: holder, pool, ticks, liquidity, `burned` |
+| `position_transfer` | PositionManager `Transfer` | Every transfer, mint and burn included |
+| `loan` | FarmentaMarket `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `Liquidate`; PositionManager `Transfer` to zero | One row per market and tokenId: depositor, pool, `status`, `everBorrowed`, running totals |
+| `loan_activity` | `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay` | The borrower side of the transaction history |
+| `liquidation` | `Liquidate`, `BadDebtSocialized` | One row per liquidation, partial or full |
+| `bad_debt_socialized` | `BadDebtSocialized` | Every loss written off against lenders |
+| `vault_activity` | ERC-4626 `Deposit`, `Withdraw`, share `Transfer` | The lender side of the transaction history |
+| `vault_balance` | share `Transfer` | Shares per market and holder: what `balanceOf` returns |
 
 `PoolListed` does not carry the PoolKey, which exists only in `Initialize`, often emitted long
 before Farmenta was deployed. That is why `Initialize` is indexed from the PoolManager's deploy
@@ -104,6 +115,60 @@ pools that are not listed.
 
 The effective LT is **not** a column: during a ramp it depends on the time it is read at
 (spec §6.5). `updateTerms` clears the ramp on `pool`; the cleared schedule stays in `lt_ramp`.
+
+### Positions
+
+`PositionManager` has no `ERC721Enumerable` (spec §12), and a position that becomes collateral
+was usually minted long before Farmenta existed, so **every** position NFT is indexed, from
+the PositionManager's deploy block. The PositionManager always calls `modifyLiquidity` with
+`salt = bytes32(tokenId)`, so `ModifyLiquidity` alone gives a tokenId its pool, ticks and
+liquidity, with no `eth_call`; `ponder.config.ts` filters that event on
+`sender = PositionManager`. `test/realPositions.test.ts` replays the real logs of two fixture
+positions and gets the figures the contracts' fork tests read from `getPoolAndPositionInfo`
+and `getPositionLiquidity`.
+
+`position.owner` is whoever holds the NFT: **the market** while the position is collateral
+(the depositor is `loan.owner`), the zero address once burned. A burned row stays, with
+`liquidity` 0. With `START_BLOCK_FLOOR` set, a position minted before the floor is not
+indexed at all, because its liquidity could not be right.
+
+### Loans
+
+The market keeps no list of loans on chain, so `loan` is the only one. A row is a position in
+custody of one market; `status` is `in_custody`, `withdrawn` or `liquidated`. A position leaves
+custody in exactly two ways: the depositor withdraws it, or a full liquidation burns it, and
+that `Transfer` to the zero address is what closes the loan. A redeposit starts the row over,
+as the contract deletes the loan on withdrawal; the earlier custody stays in `loan_activity`.
+
+**There is no debt column, and `everBorrowed` is not "has debt".** `Borrow` and `Repay` carry
+USDG amounts, not shares, and interest accrues without an event, so exact debt cannot be
+rebuilt from events (SOT v0.30). `everBorrowed` marks a *candidate*: it stays true after the
+loan is repaid in full. The backend (FAR-38) and the keeper (FAR-19) **must** confirm every
+candidate with `debtOf(tokenId)`. `borrowedUsdg`, `repaidUsdg` and `liquidatedUsdg` are running
+totals of event amounts for the current custody; their difference is not the debt.
+
+`loan.poolId` is copied from `position` when the position is deposited, because
+`CollateralDeposited` does not carry it yet (FAR-42).
+
+### Liquidations
+
+`liquidation.full` is true when the position was seized whole and burned. `repaidUsdg` and
+`badDebtUsdg` are exact ledger figures. `socializedUsdg` is the `BadDebtSocialized` of the same
+transaction, matched as the log right before `Liquidate`, which is how `liquidate` emits them.
+
+**`out0`/`out1` are not the amount seized.** Per the contract's NatSpec they are what the
+liquidator's `to` received, and on the full branch they are *measured* as `to`'s balance change
+across the burn, because the PositionManager pays `to` directly. A contract `to` can distort
+that (redeem vault shares when the ETH lands, or pass the ETH on). The ledger never reads
+them; neither should accounting built on this table.
+
+### Vault
+
+`vault_balance` follows every share `Transfer`, mints and burns included, so it equals
+`balanceOf`. What the shares are worth in USDG is `convertToAssets`, which moves with interest
+and without an event, so it is not stored. `vault_activity` has one row per `Deposit`, per
+`Withdraw` and per transfer between two holders; the mint or burn inside a deposit or a
+withdrawal is not repeated as a row.
 
 ## Queries
 
@@ -140,6 +205,28 @@ or deposited for it, so treat it as not active.
 
 `twap_pool.recordedCount` counts `Recorded` events. It is not the contract's
 `observationCount`, which stops at the ring-buffer capacity: that is `min(recordedCount, 2048)`.
+
+Positions and loans:
+
+| Route | Returns |
+|---|---|
+| `/portfolio/:address` | `positions`: the NFTs in the address's wallet. `loans`: the ones a market holds for it (`status = in_custody`) |
+| `/loans?owner=&market=&status=` | Loans, every filter optional. `/loans?status=in_custody` is the list FAR-38 snapshots HF for |
+| `/loans/keeper-candidates` | Loans still in custody, on a meme pool (`pool.tier = 2`), that have ever borrowed |
+
+Every loan comes with its position's `tickLower`, `tickUpper` and `liquidity` and its pool's
+`tier`, ordered by market and tokenId. Addresses are accepted in any case. Nothing is
+paginated: a keeper that silently got half the candidates would be worse than a slow answer.
+
+```sh
+$ curl -s localhost:42069/loans/keeper-candidates | jq '.[0] | {market, tokenId, owner, poolId, everBorrowed, liquidity, tier}'
+```
+
+**Keeper candidates are candidates.** A loan repaid in full stays on the list, so confirm each
+with `debtOf`. The list is as of the last indexed block: a loan deposited and borrowed against
+in a block not indexed yet is missing, so read `/status` first, as for `/pools`.
+
+Transfers, activity, liquidations and vault balances are served as stored by `/graphql`.
 
 `uint128` values and timestamps are decimal strings, as in GraphQL. `debtCapUsdg` is USDG
 with 6 decimals; `minPositionUsd` is USD 1e18 (spec §6.5).
