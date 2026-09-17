@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# secrets: only .env.example is committed
+.env
+.env.*
+!.env.example
+
+# ponder
+.ponder/
+generated/
+
+# smart-contract checkout used by `pnpm abi:sync`
+.cache/
+
+# misc
+.DS_Store
+*.log
+*.tsbuildinfo
