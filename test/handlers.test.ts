@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { zeroAddress, type Hex } from "viem";
+import { zeroAddress } from "viem";
 
 import * as schema from "../ponder.schema.ts";
 import {
@@ -11,17 +11,20 @@ import {
   onPoolTermsUpdated,
   onTokenConfigured,
 } from "../src/handlers/collateralPolicy.ts";
-import type { Log } from "../src/handlers/event.ts";
 import { onInitialize } from "../src/handlers/poolManager.ts";
 import { onRecorded } from "../src/handlers/twapRecorder.ts";
 import { poolIdOf, type PoolKey } from "../src/lib/poolKey.ts";
 import { observationAgeAt, rampStatusAt } from "../src/lib/poolView.ts";
+import { blockOf, chain, logIndexOf, timeOf, txOf } from "./support/events.ts";
 import { fakeDb } from "./support/fakeDb.ts";
 
 const USDG = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
+const FEED_A = "0x61b7e5650328764b076a108eff5fa7282a1b9ad2";
+const FEED_B = "0x78f3556b67e17df817d51ef5a990cdaf09e8d3a9";
 const LISTED: PoolKey = { currency0: zeroAddress, currency1: USDG, fee: 500, tickSpacing: 10, hooks: zeroAddress };
 const UNLISTED: PoolKey = { ...LISTED, fee: 3000, tickSpacing: 60 };
 const LISTED_ID = poolIdOf(LISTED);
+const UNLISTED_ID = poolIdOf(UNLISTED);
 
 const TERMS = {
   maxLtvBps: 6500,
@@ -31,21 +34,23 @@ const TERMS = {
   debtCapUsdg: 500_000_000_000n,
   minPositionUsd: 50n * 10n ** 18n,
 };
-const TIGHTER = { ...TERMS, maxLtvBps: 6000, ltBps: 7400, debtCapUsdg: 400_000_000_000n };
+const TIGHTER = {
+  maxLtvBps: 6000,
+  ltBps: 7400,
+  liquidatorBonusBps: 600,
+  removeHaircutBps: 100,
+  debtCapUsdg: 400_000_000_000n,
+  minPositionUsd: 60n * 10n ** 18n,
+};
+const NO_RAMP = { rampLtFromBps: null, rampLtTargetBps: null, rampStart: null, rampDuration: null };
 
-// Events get increasing blocks and timestamps, like the chain gives them.
-function chain() {
-  let block = 100n;
-  return <Args>(args: Args): Log<Args> => {
-    block += 1n;
-    return {
-      args,
-      block: { number: block, timestamp: 1_000_000n + block },
-      log: { logIndex: 0 },
-      transaction: { hash: `0x${block.toString(16).padStart(64, "0")}` as Hex },
-    };
-  };
-}
+const logRow = (n: number) => ({
+  poolId: LISTED_ID,
+  blockNumber: blockOf(n),
+  logIndex: logIndexOf(n),
+  timestamp: timeOf(n),
+  transactionHash: txOf(n),
+});
 
 const initialize = (key: PoolKey) => ({ id: poolIdOf(key), ...key });
 
@@ -57,14 +62,22 @@ describe("pool and listing handlers", () => {
       await onInitialize(db, at(initialize(LISTED)));
       await onPoolListed(db, at({ poolId: LISTED_ID, tier: 1, params: TERMS }));
 
-      const [row] = rows(schema.pool) as [PoolKey & { id: Hex; tier: number; frozen: boolean }];
-      assert.deepEqual(
-        { currency0: row.currency0, currency1: row.currency1, fee: row.fee, tickSpacing: row.tickSpacing, hooks: row.hooks },
-        LISTED,
-      );
-      assert.equal(poolIdOf(row), row.id);
-      assert.equal(row.tier, 1);
-      assert.equal(row.frozen, false);
+      assert.deepEqual(rows(schema.uniswapPool), [
+        { id: LISTED_ID, ...LISTED, initializedBlock: blockOf(1), initializedAt: timeOf(1) },
+      ]);
+      assert.deepEqual(rows(schema.pool), [
+        {
+          id: LISTED_ID,
+          ...LISTED,
+          tier: 1,
+          ...TERMS,
+          frozen: false,
+          listedBlock: blockOf(2),
+          listedAt: timeOf(2),
+          updatedAt: timeOf(2),
+        },
+      ]);
+      assert.equal(poolIdOf(rows(schema.pool)[0] as PoolKey), LISTED_ID);
     });
 
     it("`updateTerms` makes the new terms current and keeps the earlier ones", async () => {
@@ -74,31 +87,38 @@ describe("pool and listing handlers", () => {
       await onPoolListed(db, at({ poolId: LISTED_ID, tier: 1, params: TERMS }));
       await onPoolTermsUpdated(db, at({ poolId: LISTED_ID, params: TIGHTER }));
 
-      const [row] = rows(schema.pool) as [typeof TERMS];
-      assert.equal(row.ltBps, 7400);
-      assert.equal(row.maxLtvBps, 6000);
-      assert.equal(row.debtCapUsdg, 400_000_000_000n);
-
-      const history = rows(schema.poolTermsChange) as ({ source: string } & typeof TERMS)[];
-      assert.deepEqual(
-        history.map(({ source, ltBps, maxLtvBps }) => ({ source, ltBps, maxLtvBps })),
-        [
-          { source: "listed", ltBps: 7500, maxLtvBps: 6500 },
-          { source: "updated", ltBps: 7400, maxLtvBps: 6000 },
-        ],
-      );
+      assert.deepEqual(rows(schema.pool), [
+        {
+          id: LISTED_ID,
+          ...LISTED,
+          tier: 1,
+          ...TIGHTER,
+          frozen: false,
+          ...NO_RAMP,
+          listedBlock: blockOf(2),
+          listedAt: timeOf(2),
+          updatedAt: timeOf(3),
+        },
+      ]);
+      assert.deepEqual(rows(schema.poolTermsChange), [
+        { ...logRow(2), source: "listed", ...TERMS },
+        { ...logRow(3), source: "updated", ...TIGHTER },
+      ]);
     });
 
     it("`setFrozen(true)` then `setFrozen(false)`: the status follows the order of events", async () => {
       const { db, rows } = fakeDb();
       const at = chain();
       await onPoolListed(db, at({ poolId: LISTED_ID, tier: 1, params: TERMS }));
-      const frozen = () => (rows(schema.pool)[0] as { frozen: boolean }).frozen;
+      const status = () => {
+        const { frozen, updatedAt } = rows(schema.pool)[0] as { frozen: boolean; updatedAt: bigint };
+        return { frozen, updatedAt };
+      };
 
       await onPoolFrozen(db, at({ poolId: LISTED_ID, frozen: true }));
-      assert.equal(frozen(), true);
+      assert.deepEqual(status(), { frozen: true, updatedAt: timeOf(2) });
       await onPoolFrozen(db, at({ poolId: LISTED_ID, frozen: false }));
-      assert.equal(frozen(), false);
+      assert.deepEqual(status(), { frozen: false, updatedAt: timeOf(3) });
     });
 
     it("a scheduled ramp answers before `start`, in the middle and after `start + duration`", async () => {
@@ -110,51 +130,70 @@ describe("pool and listing handlers", () => {
         at({ poolId: LISTED_ID, ltFromBps: 7500, ltTargetBps: 7000, start: 2_000_000, duration: 1_000 }),
       );
 
-      const row = rows(schema.pool)[0] as Parameters<typeof rampStatusAt>[0];
-      const at_ = (t: bigint) => {
+      assert.deepEqual(rows(schema.ltRamp), [
+        { ...logRow(2), ltFromBps: 7500, ltTargetBps: 7000, start: 2_000_000n, duration: 1_000n },
+      ]);
+      const row = rows(schema.pool)[0] as Parameters<typeof rampStatusAt>[0] & { updatedAt: bigint };
+      assert.deepEqual(
+        {
+          rampLtFromBps: row.rampLtFromBps,
+          rampLtTargetBps: row.rampLtTargetBps,
+          rampStart: row.rampStart,
+          rampDuration: row.rampDuration,
+          updatedAt: row.updatedAt,
+        },
+        { rampLtFromBps: 7500, rampLtTargetBps: 7000, rampStart: 2_000_000n, rampDuration: 1_000n, updatedAt: timeOf(2) },
+      );
+
+      const statusAt = (t: bigint) => {
         const { rampRunning, effectiveLtBps } = rampStatusAt(row, t);
         return { rampRunning, effectiveLtBps };
       };
-      assert.deepEqual(at_(1_999_000n), { rampRunning: true, effectiveLtBps: 7500 });
-      assert.deepEqual(at_(2_000_500n), { rampRunning: true, effectiveLtBps: 7250 });
-      assert.deepEqual(at_(2_001_000n), { rampRunning: false, effectiveLtBps: 7000 });
-      assert.equal(rows(schema.ltRamp).length, 1);
+      assert.deepEqual(statusAt(1_999_000n), { rampRunning: true, effectiveLtBps: 7500 });
+      assert.deepEqual(statusAt(2_000_500n), { rampRunning: true, effectiveLtBps: 7250 });
+      assert.deepEqual(statusAt(2_001_000n), { rampRunning: false, effectiveLtBps: 7000 });
     });
 
     it("TWAP observations are kept per pool, and the age of the newest one can be computed", async () => {
       const { db, rows } = fakeDb();
       const at = chain();
-      const other = poolIdOf(UNLISTED);
       await onRecorded(db, at({ poolId: LISTED_ID, index: 0, timestamp: 5_000n, tickCumulative: 0n }));
-      await onRecorded(db, at({ poolId: other, index: 0, timestamp: 5_100n, tickCumulative: 0n }));
+      await onRecorded(db, at({ poolId: UNLISTED_ID, index: 0, timestamp: 5_100n, tickCumulative: 0n }));
       await onRecorded(db, at({ poolId: LISTED_ID, index: 1, timestamp: 5_300n, tickCumulative: -59_455_200n }));
 
-      assert.equal(rows(schema.twapObservation).length, 3);
-      const latest = Object.fromEntries(
-        (rows(schema.twapPool) as { poolId: Hex; lastObservationAt: bigint; observationCount: number }[]).map(
-          (row) => [row.poolId, row],
-        ),
+      const byPoolThenTime = (a: { poolId: string; timestamp?: bigint }, b: { poolId: string; timestamp?: bigint }) =>
+        a.poolId.localeCompare(b.poolId) || Number((a.timestamp ?? 0n) - (b.timestamp ?? 0n));
+      assert.deepEqual(
+        (rows(schema.twapObservation) as { poolId: string; timestamp: bigint }[]).sort(byPoolThenTime),
+        [
+          { poolId: LISTED_ID, timestamp: 5_000n, index: 0, tickCumulative: 0n, blockNumber: blockOf(1) },
+          { poolId: LISTED_ID, timestamp: 5_300n, index: 1, tickCumulative: -59_455_200n, blockNumber: blockOf(3) },
+          { poolId: UNLISTED_ID, timestamp: 5_100n, index: 0, tickCumulative: 0n, blockNumber: blockOf(2) },
+        ].sort(byPoolThenTime),
       );
-      assert.equal(latest[LISTED_ID]?.lastObservationAt, 5_300n);
-      assert.equal(latest[LISTED_ID]?.observationCount, 2);
-      assert.equal(latest[other]?.lastObservationAt, 5_100n);
+      assert.deepEqual(
+        (rows(schema.twapPool) as { poolId: string }[]).sort(byPoolThenTime),
+        [
+          { poolId: LISTED_ID, lastObservationAt: 5_300n, lastIndex: 1, lastTickCumulative: -59_455_200n, recordedCount: 2 },
+          { poolId: UNLISTED_ID, lastObservationAt: 5_100n, lastIndex: 0, lastTickCumulative: 0n, recordedCount: 1 },
+        ].sort(byPoolThenTime),
+      );
       // The 600-second alert: 601 seconds after the newest observation it fires.
-      assert.equal(observationAgeAt(latest[LISTED_ID]!.lastObservationAt, 5_901n), 601n);
+      assert.equal(observationAgeAt(5_300n, 5_901n), 601n);
     });
 
-    it("tokens and hooks hold the latest configuration", async () => {
+    it("tokens and hooks hold the latest configuration, every column of it", async () => {
       const { db, rows } = fakeDb();
       const at = chain();
-      const feed = "0x61b7e5650328764b076a108eff5fa7282a1b9ad2";
-      await onTokenConfigured(db, at({ currency: USDG, enabled: true, tier: 1, decimals: 6, priceFeed: feed }));
-      await onTokenConfigured(db, at({ currency: USDG, enabled: false, tier: 1, decimals: 6, priceFeed: feed }));
-      await onHookAllowlisted(db, at({ hooks: feed, allowed: true }));
-      await onHookAllowlisted(db, at({ hooks: feed, allowed: false }));
+      await onTokenConfigured(db, at({ currency: USDG, enabled: true, tier: 1, decimals: 6, priceFeed: FEED_A }));
+      await onTokenConfigured(db, at({ currency: USDG, enabled: false, tier: 2, decimals: 8, priceFeed: FEED_B }));
+      await onHookAllowlisted(db, at({ hooks: FEED_A, allowed: true }));
+      await onHookAllowlisted(db, at({ hooks: FEED_A, allowed: false }));
 
-      assert.equal(rows(schema.token).length, 1);
-      assert.equal((rows(schema.token)[0] as { enabled: boolean }).enabled, false);
-      assert.equal(rows(schema.hook).length, 1);
-      assert.equal((rows(schema.hook)[0] as { allowed: boolean }).allowed, false);
+      assert.deepEqual(rows(schema.token), [
+        { currency: USDG, enabled: false, tier: 2, decimals: 8, priceFeed: FEED_B, updatedAt: timeOf(2) },
+      ]);
+      assert.deepEqual(rows(schema.hook), [{ address: FEED_A, allowed: false, updatedAt: timeOf(4) }]);
     });
   });
 
@@ -166,7 +205,7 @@ describe("pool and listing handlers", () => {
       await onInitialize(db, at(initialize(UNLISTED)));
       await onPoolListed(db, at({ poolId: LISTED_ID, tier: 1, params: TERMS }));
 
-      assert.equal(rows(schema.uniswapPool).length, 2);
+      assert.deepEqual(rows(schema.uniswapPool).map((row) => row.id).sort(), [LISTED_ID, UNLISTED_ID].sort());
       assert.deepEqual(
         rows(schema.pool).map((row) => row.id),
         [LISTED_ID],
@@ -192,15 +231,19 @@ describe("pool and listing handlers", () => {
   });
 
   describe("edge case", () => {
-    it("a pool listed before its `Initialize` gets its key when the event arrives", async () => {
+    it("a pool listed before its `Initialize` has a null key until the event arrives", async () => {
       const { db, rows } = fakeDb();
       const at = chain();
       await onPoolListed(db, at({ poolId: LISTED_ID, tier: 1, params: TERMS }));
-      assert.equal((rows(schema.pool)[0] as { fee: number | null }).fee, null);
+      const keyOf = () => {
+        const { currency0, currency1, fee, tickSpacing, hooks } = rows(schema.pool)[0] as Record<string, unknown>;
+        return { currency0, currency1, fee, tickSpacing, hooks };
+      };
+      assert.deepEqual(keyOf(), { currency0: null, currency1: null, fee: null, tickSpacing: null, hooks: null });
 
       await onInitialize(db, at(initialize(LISTED)));
-      const row = rows(schema.pool)[0] as PoolKey & { id: Hex };
-      assert.equal(poolIdOf(row), row.id);
+      assert.deepEqual(keyOf(), LISTED);
+      assert.equal(poolIdOf(keyOf() as PoolKey), LISTED_ID);
     });
 
     it("`updateTerms` clears the ramp in force; the schedule stays in `lt_ramp`", async () => {
@@ -214,53 +257,43 @@ describe("pool and listing handlers", () => {
       await onPoolTermsUpdated(db, at({ poolId: LISTED_ID, params: TIGHTER }));
 
       const { rampLtFromBps, rampLtTargetBps, rampStart, rampDuration } = rows(schema.pool)[0] as Record<string, unknown>;
-      assert.deepEqual([rampLtFromBps, rampLtTargetBps, rampStart, rampDuration], [null, null, null, null]);
+      assert.deepEqual({ rampLtFromBps, rampLtTargetBps, rampStart, rampDuration }, NO_RAMP);
 
       const status = rampStatusAt(rows(schema.pool)[0] as Parameters<typeof rampStatusAt>[0], 2_000_500n);
       assert.deepEqual(status, { t: 2_000_500n, rampRunning: false, rampEndsAt: null, effectiveLtBps: 7400 });
-      assert.equal(rows(schema.ltRamp).length, 1);
+      assert.deepEqual(rows(schema.ltRamp), [
+        { ...logRow(2), ltFromBps: 7500, ltTargetBps: 7000, start: 2_000_000n, duration: 1_000n },
+      ]);
     });
 
-    it("a second ramp replaces the first", async () => {
+    it("a second ramp replaces the first in `pool`, and both stay in `lt_ramp`", async () => {
       const { db, rows } = fakeDb();
       const at = chain();
       await onPoolListed(db, at({ poolId: LISTED_ID, tier: 1, params: TERMS }));
       await onLtRampScheduled(db, at({ poolId: LISTED_ID, ltFromBps: 7500, ltTargetBps: 7200, start: 2_000_000, duration: 1_000 }));
       await onLtRampScheduled(db, at({ poolId: LISTED_ID, ltFromBps: 7350, ltTargetBps: 7000, start: 2_000_500, duration: 500 }));
 
-      const row = rows(schema.pool)[0] as { rampLtFromBps: number; rampStart: bigint };
-      assert.equal(row.rampLtFromBps, 7350);
-      assert.equal(row.rampStart, 2_000_500n);
-      assert.equal(rows(schema.ltRamp).length, 2);
+      const { rampLtFromBps, rampLtTargetBps, rampStart, rampDuration } = rows(schema.pool)[0] as Record<string, unknown>;
+      assert.deepEqual(
+        { rampLtFromBps, rampLtTargetBps, rampStart, rampDuration },
+        { rampLtFromBps: 7350, rampLtTargetBps: 7000, rampStart: 2_000_500n, rampDuration: 500n },
+      );
+      assert.deepEqual(rows(schema.ltRamp), [
+        { ...logRow(2), ltFromBps: 7500, ltTargetBps: 7200, start: 2_000_000n, duration: 1_000n },
+        { ...logRow(3), ltFromBps: 7350, ltTargetBps: 7000, start: 2_000_500n, duration: 500n },
+      ]);
     });
 
     it("a pool's first observation, `index 0` and `tickCumulative 0`, is stored as data", async () => {
       const { db, rows } = fakeDb();
       await onRecorded(db, chain()({ poolId: LISTED_ID, index: 0, timestamp: 5_000n, tickCumulative: 0n }));
-      assert.deepEqual(
-        (rows(schema.twapObservation) as { index: number; tickCumulative: bigint }[]).map((row) => [row.index, row.tickCumulative]),
-        [[0, 0n]],
-      );
-      assert.equal((rows(schema.twapPool)[0] as { observationCount: number }).observationCount, 1);
-    });
 
-    it("a reindex from zero gives identical tables, without an `eth_call`", async () => {
-      // fakeDb has no `client`, and the handlers receive the store alone: replaying the
-      // same events is all a reindex can do.
-      const replay = async () => {
-        const { db, dump } = fakeDb();
-        const at = chain();
-        await onInitialize(db, at(initialize(LISTED)));
-        await onInitialize(db, at(initialize(UNLISTED)));
-        await onTokenConfigured(db, at({ currency: USDG, enabled: true, tier: 1, decimals: 6, priceFeed: USDG }));
-        await onPoolListed(db, at({ poolId: LISTED_ID, tier: 1, params: TERMS }));
-        await onPoolFrozen(db, at({ poolId: LISTED_ID, frozen: true }));
-        await onLtRampScheduled(db, at({ poolId: LISTED_ID, ltFromBps: 7500, ltTargetBps: 6000, start: 2_000_000, duration: 1_000 }));
-        await onRecorded(db, at({ poolId: LISTED_ID, index: 0, timestamp: 5_000n, tickCumulative: 0n }));
-        await onRecorded(db, at({ poolId: LISTED_ID, index: 1, timestamp: 5_300n, tickCumulative: -1n }));
-        return dump();
-      };
-      assert.deepEqual(await replay(), await replay());
+      assert.deepEqual(rows(schema.twapObservation), [
+        { poolId: LISTED_ID, timestamp: 5_000n, index: 0, tickCumulative: 0n, blockNumber: blockOf(1) },
+      ]);
+      assert.deepEqual(rows(schema.twapPool), [
+        { poolId: LISTED_ID, lastObservationAt: 5_000n, lastIndex: 0, lastTickCumulative: 0n, recordedCount: 1 },
+      ]);
     });
   });
 });
