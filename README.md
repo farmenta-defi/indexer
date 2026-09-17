@@ -41,6 +41,8 @@ pnpm db:up                      # Postgres 16 on 127.0.0.1:5434
 pnpm dev
 ```
 
+`pnpm typecheck` and `pnpm test` need neither a database nor an RPC.
+
 `.env.local` is the file the Ponder CLI loads; it is gitignored, and `.env.example` is the
 only env file in the repo. Every secret lives there and nowhere else: `DATABASE_URL` carries
 a password and `PONDER_RPC_URL` carries an API key, so neither is ever written out in this

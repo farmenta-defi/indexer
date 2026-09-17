@@ -30,10 +30,10 @@ function parseContract(value: unknown, path: string): DeployedContract {
 }
 
 /** The deployment named by `name`, or `undefined` when none is configured. */
-export function loadDeployment(name: string | undefined): Deployment | undefined {
+export function loadDeployment(name: string | undefined, dir = DEPLOYMENTS_DIR): Deployment | undefined {
   if (!name) return undefined;
 
-  const file = join(DEPLOYMENTS_DIR, `${name}.json`);
+  const file = join(dir, `${name}.json`);
   if (!existsSync(file)) throw new Error(`FARMENTA_DEPLOYMENT=${name}, but ${file} does not exist`);
 
   const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;

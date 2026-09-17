@@ -11,7 +11,8 @@
     "verbatimModuleSyntax": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
   "include": ["./**/*.ts"],
   "exclude": ["node_modules", ".cache", "generated"]
