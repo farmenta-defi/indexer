@@ -193,3 +193,69 @@ export const positionTransfer = onchainTable(
     pk: primaryKey({ columns: [table.tokenId, table.blockNumber, table.logIndex] }),
   }),
 );
+
+// A position taken into custody by a market: the only list of loans there is, since the
+// market keeps no enumeration on chain (spec §13). There is no debt column. `Borrow` and
+// `Repay` carry USDG amounts, not shares, and interest accrues without an event, so the
+// exact debt is `debtOf(tokenId)`, read by the backend and the keeper.
+export const loan = onchainTable(
+  "loan",
+  (t) => ({
+    // The FarmentaMarket proxy holding the position. One row per market and tokenId: a
+    // redeposit starts the row over, as `withdrawCollateral` deletes the loan on chain. What
+    // happened in an earlier custody stays in `loan_activity`.
+    market: t.hex().notNull(),
+    tokenId: t.bigint().notNull(),
+    // The depositor, who alone may borrow against and withdraw the position.
+    owner: t.hex().notNull(),
+    // From `position`, until the market events carry `poolId` themselves (FAR-42). Null only
+    // when START_BLOCK_FLOOR skipped the position's mint.
+    poolId: t.hex(),
+    // "in_custody", "withdrawn" or "liquidated" (src/lib/loan.ts).
+    status: t.text().notNull(),
+    // True from the first `Borrow` of this custody. A candidate for debt, not proof of it:
+    // consumers must confirm with `debtOf`, because a repaid loan stays flagged.
+    everBorrowed: t.boolean().notNull(),
+    // Running totals for this custody, USDG with 6 decimals. `repaidUsdg` is the borrower's
+    // `Repay`; what liquidators repaid is kept apart. Neither includes interest still owed.
+    borrowedUsdg: t.bigint().notNull(),
+    repaidUsdg: t.bigint().notNull(),
+    liquidatedUsdg: t.bigint().notNull(),
+    depositedBlock: t.bigint().notNull(),
+    depositedAt: t.bigint().notNull(),
+    lastActivityAt: t.bigint().notNull(),
+    // When the position left custody, null while it is held.
+    closedAt: t.bigint(),
+  }),
+  (table) => ({
+    pk: primaryKey({ columns: [table.market, table.tokenId] }),
+    ownerIdx: index().on(table.owner),
+    statusIdx: index().on(table.status),
+    poolIdx: index().on(table.poolId),
+  }),
+);
+
+// One row per `CollateralDeposited`, `CollateralWithdrawn`, `Borrow` and `Repay`: the
+// borrower side of the transaction history. Liquidations are in `liquidation`.
+export const loanActivity = onchainTable(
+  "loan_activity",
+  (t) => ({
+    market: t.hex().notNull(),
+    blockNumber: t.bigint().notNull(),
+    logIndex: t.integer().notNull(),
+    timestamp: t.bigint().notNull(),
+    transactionHash: t.hex().notNull(),
+    tokenId: t.bigint().notNull(),
+    // The loan's depositor. `Borrow` and `Repay` do not name anyone, and anyone may repay.
+    owner: t.hex().notNull(),
+    // "deposit", "withdraw", "borrow" or "repay".
+    kind: t.text().notNull(),
+    // USDG, 6 decimals. Null for "deposit" and "withdraw".
+    amountUsdg: t.bigint(),
+  }),
+  (table) => ({
+    pk: primaryKey({ columns: [table.market, table.blockNumber, table.logIndex] }),
+    ownerIdx: index().on(table.owner),
+    tokenIdx: index().on(table.market, table.tokenId),
+  }),
+);
