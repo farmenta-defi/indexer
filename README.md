@@ -69,13 +69,17 @@ Keep the floor at or below the block the first Farmenta contract was deployed in
 a `CollateralWithdrawn`, `Borrow`, `Repay` or `Liquidate` for a loan whose `CollateralDeposited`
 was skipped, or vault shares leaving a holder whose deposit was skipped, stops the indexer, because a row that cannot be right is worse than no row. Positions are the
 exception, as their mints go back to block 9,073: one minted before the floor is left out
-silently, and a loan on it has a null `poolId`, so it never shows up as a keeper candidate.
+silently, and a loan on it has a null `poolId` until a `LiquidityChanged` or `CollectFees`
+names it. `/loans/keeper-candidates` joins the pool to read its tier, so such a loan is missing
+from the keeper's list without any error: one more reason never to set the floor in production.
 
 **Farmenta addresses.** None is written in code: mainnet is not deployed yet (FAR-23), and
 a fork or redeploy moves all of them. Copy `deployments/example.json` to
 `deployments/<name>.json`, fill in each address and the block it was deployed in, and set
 `FARMENTA_DEPLOYMENT=<name>`. The loader refuses the zero address, so the example cannot be
-used unedited. With `FARMENTA_DEPLOYMENT` empty only the Uniswap contracts are indexed.
+used unedited. With `FARMENTA_DEPLOYMENT` empty only the Uniswap contracts are indexed. A market's
+`startBlock` must not be later than the block it was really deployed in: the first `Borrow`,
+`CollateralWithdrawn` or share burn for something deposited before it stops the indexer.
 
 Time is always `block.timestamp`. On this chain `block.number` inside a contract is the L1
 block (Arbitrum Orbit, spec §14), so nothing here derives time from block numbers.
@@ -139,6 +143,13 @@ custody of one market; `status` is `in_custody`, `withdrawn` or `liquidated`. A 
 custody in exactly two ways: the depositor withdraws it, or a full liquidation burns it, and
 that `Transfer` to the zero address is what closes the loan. A redeposit starts the row over,
 as the contract deletes the loan on withdrawal; the earlier custody stays in `loan_activity`.
+
+**`loan` and `/loans?owner=` hold the current or the last custody only.** When Alice withdraws a
+position to Bob and Bob deposits it in the same market, the row becomes Bob's, with
+`everBorrowed` and every total back at zero, and `/loans?owner=<alice>` no longer returns it.
+What Alice did is in `loan_activity`, which names the `owner` on every row; `depositedBlock`
+cuts that history per custody (rows before it belong to an earlier one). Liquidations keep
+their `owner` in `liquidation`.
 
 **There is no debt column, and `everBorrowed` is not "has debt".** `Borrow` and `Repay` carry
 USDG amounts, not shares, and interest accrues without an event, so exact debt cannot be
@@ -221,8 +232,8 @@ Positions and loans:
 
 | Route | Returns |
 |---|---|
-| `/portfolio/:address` | Not the zero address. `positions`: the NFTs in the address's wallet. `loans`: the ones a market holds for it (`status = in_custody`). `vaultShares`: its `vault_balance` rows, one per market |
-| `/loans?owner=&market=&status=` | Loans, every filter optional. `/loans?status=in_custody` is the list FAR-38 snapshots HF for |
+| `/portfolio/:address` | Not the zero address. `positions`: the NFTs in the address's wallet. `loans`: the ones a market holds for it (`status = in_custody`). `vaultShares`: its `vault_balance` rows, one per market. Meant for users: a market's own address returns every position in its custody, unpaginated |
+| `/loans?owner=&market=&status=` | Loans, every filter optional. One row per market and tokenId, the current or last custody only: a past depositor is found in `loan_activity`, not here. `/loans?status=in_custody` is the list FAR-38 snapshots HF for |
 | `/loans/keeper-candidates` | Loans still in custody, on a meme pool (`pool.tier = 2`), that have ever borrowed |
 
 Every loan comes with its position's `tickLower`, `tickUpper` and `liquidity` and its pool's
