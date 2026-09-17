@@ -314,3 +314,50 @@ export const badDebtSocialized = onchainTable(
     pk: primaryKey({ columns: [table.market, table.blockNumber, table.logIndex] }),
   }),
 );
+
+// The lender side of a market, which is an ERC-4626 vault over USDG: one row per `Deposit`,
+// per `Withdraw`, and per share `Transfer` between two holders. The `Transfer` that mints or
+// burns shares inside a deposit or a withdrawal is not repeated here; it moves `vault_balance`.
+export const vaultActivity = onchainTable(
+  "vault_activity",
+  (t) => ({
+    market: t.hex().notNull(),
+    blockNumber: t.bigint().notNull(),
+    logIndex: t.integer().notNull(),
+    timestamp: t.bigint().notNull(),
+    transactionHash: t.hex().notNull(),
+    // "deposit", "withdraw" or "transfer".
+    kind: t.text().notNull(),
+    // `msg.sender` of the deposit or the withdrawal. Null for "transfer".
+    sender: t.hex(),
+    // Whose shares: minted to on "deposit", burned from on "withdraw", sent by on "transfer".
+    owner: t.hex().notNull(),
+    // Who received: the USDG on "withdraw", the shares on "transfer". Null for "deposit".
+    receiver: t.hex(),
+    // USDG, 6 decimals. Null for "transfer", which moves shares only.
+    assetsUsdg: t.bigint(),
+    shares: t.bigint().notNull(),
+  }),
+  (table) => ({
+    pk: primaryKey({ columns: [table.market, table.blockNumber, table.logIndex] }),
+    ownerIdx: index().on(table.owner),
+    receiverIdx: index().on(table.receiver),
+  }),
+);
+
+// Shares per holder, from every share `Transfer`, mints and burns included: what `balanceOf`
+// returns. Their worth in USDG is `convertToAssets`, which moves with interest and without an
+// event, so it is not a column.
+export const vaultBalance = onchainTable(
+  "vault_balance",
+  (t) => ({
+    market: t.hex().notNull(),
+    account: t.hex().notNull(),
+    shares: t.bigint().notNull(),
+    updatedAt: t.bigint().notNull(),
+  }),
+  (table) => ({
+    pk: primaryKey({ columns: [table.market, table.account] }),
+    accountIdx: index().on(table.account),
+  }),
+);
