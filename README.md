@@ -36,19 +36,22 @@ Needs Node ≥ 22, pnpm and Docker.
 
 ```sh
 pnpm install
-cp .env.example .env.local      # then fill it in
+cp .env.example .env            # then fill it in
 pnpm db:up                      # Postgres 16 on 127.0.0.1:5434
 pnpm dev
 ```
 
 `pnpm typecheck` and `pnpm test` need neither a database nor an RPC.
 
-`.env.local` is the file the Ponder CLI loads; it is gitignored, and `.env.example` is the
-only env file in the repo. Every secret lives there and nowhere else: `DATABASE_URL` carries
-a password and `PONDER_RPC_URL` carries an API key, so neither is ever written out in this
-README, an issue, a commit message or the pm2 process file. `.env.example` describes the
-shape of each value. The Docker database has no built-in password either: `pnpm db:up`
-refuses to start until `POSTGRES_PASSWORD` is set in `.env.local`.
+`.env` is gitignored, and `.env.example` is the only env file in the repo. Node loads `.env`
+itself (`--env-file`, in the package scripts and the pm2 file) before Ponder starts, which
+is what lets `PORT` live there too; Ponder's warning about a missing `.env.local` is harmless.
+
+Every secret lives in `.env` and nowhere else: `DATABASE_URL` carries a password and
+`PONDER_RPC_URL` carries an API key, so neither is ever written out in this README, an
+issue, a commit message or the pm2 process file. `.env.example` describes the shape of each
+value. The Docker database has no built-in password either: `pnpm db:up` refuses to start
+until `POSTGRES_PASSWORD` is set in `.env`.
 
 **RPC.** `PONDER_RPC_URL` is required and has no fallback, on purpose. Alchemy's free tier
 caps `eth_getLogs` at 10 blocks — about one second of this chain — and the public RPC
@@ -135,13 +138,17 @@ psql: error: ... FATAL:  permission denied for database "lpmon"
 ```sh
 git clone https://github.com/farmenta-defi/indexer.git && cd indexer
 pnpm install --frozen-lockfile
-cp .env.example .env.local && chmod 600 .env.local
+cp .env.example .env && chmod 600 .env
 ```
 
 `chmod 600` because the file holds the database password and the RPC key. Fill it in: the
 paid `PONDER_RPC_URL`, `DATABASE_URL` for the `farmenta_indexer` role (shape in
 `.env.example`), `FARMENTA_DEPLOYMENT` once there is one, and a `PORT` that is free on the
-VPS. Leave `START_BLOCK_FLOOR` empty.
+VPS — 42070 already belongs to the lp-monitor-v2 indexer. Leave `START_BLOCK_FLOOR` and
+`POSTGRES_PASSWORD` empty; the latter is only for the local Docker database.
+
+pm2 must run under Node ≥ 22 (on this VPS: nvm), since it starts the indexer with its own
+`node`.
 
 **3. Start.**
 

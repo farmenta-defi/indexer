@@ -9,14 +9,14 @@
   },
   "packageManager": "pnpm@10.15.1",
   "scripts": {
-    "dev": "ponder dev --schema ponder",
-    "start": "ponder start --schema ponder",
-    "codegen": "ponder codegen",
+    "dev": "node --env-file-if-exists=.env node_modules/ponder/dist/esm/bin/ponder.js dev --schema ponder",
+    "start": "node --env-file-if-exists=.env node_modules/ponder/dist/esm/bin/ponder.js start --schema ponder",
+    "codegen": "node --env-file-if-exists=.env node_modules/ponder/dist/esm/bin/ponder.js codegen",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/**/*.test.ts\"",
     "abi:sync": "node scripts/sync-abis.mjs",
-    "db:up": "docker compose --env-file .env.local up -d --wait postgres",
-    "db:down": "docker compose --env-file .env.local down"
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose down"
   },
   "dependencies": {
     "hono": "^4.12.32",

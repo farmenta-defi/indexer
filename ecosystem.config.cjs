@@ -1,5 +1,5 @@
-// pm2 process file for the VPS (README, "Deploy"). Secrets are not here: `ponder start`
-// reads them from .env.local in `cwd`.
+// pm2 process file for the VPS (README, "Deploy"). Secrets are not here: Node loads them
+// from .env in `cwd` (`--env-file`), before Ponder reads PORT.
 module.exports = {
   apps: [
     {
@@ -8,6 +8,7 @@ module.exports = {
       script: "node_modules/ponder/dist/esm/bin/ponder.js",
       args: "start --schema ponder",
       interpreter: "node",
+      node_args: "--env-file=.env",
       // One instance only: two Ponder processes on one schema fight over its lock.
       instances: 1,
       exec_mode: "fork",

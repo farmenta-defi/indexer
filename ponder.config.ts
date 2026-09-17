@@ -9,9 +9,9 @@ import { twapRecorderAbi } from "./abis/TwapRecorder";
 import { loadDeployment } from "./config/deployment";
 import { UNISWAP } from "./config/uniswap";
 
-// Environment comes from .env.local, which the Ponder CLI loads before anything else.
-// Loading another file from here would be too late for the variables Ponder itself reads
-// at startup, such as PORT.
+// Environment comes from .env, loaded by Node itself (`--env-file`, see package.json and
+// ecosystem.config.cjs) before Ponder starts. Loading it from here would be too late for
+// the variables Ponder reads at startup, such as PORT.
 
 function requireEnv(name: string): string {
   const value = process.env[name];

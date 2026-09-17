@@ -5,8 +5,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: farmenta_indexer
-      # No password in the repo, not even a dev one: it comes from .env.local (`pnpm db:up`).
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.local}
+      # No password in the repo, not even a dev one: compose reads it from .env.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: farmenta
     ports:
       # 5434, not 5432/5433: lp-monitor-v2's dev database already sits on 5433.
