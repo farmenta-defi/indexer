@@ -120,7 +120,8 @@ describe("loan handlers", () => {
       const { db, rows, at } = await deposited();
       await onBorrow(db, at({ tokenId: 7n, amount: 300_000_000n }, BLUE_CHIP));
       await onBorrow(db, at({ tokenId: 7n, amount: 200_000_000n }, BLUE_CHIP));
-      await onRepay(db, at({ tokenId: 7n, amount: 500_000_123n }, BLUE_CHIP)); // principal and interest
+      await onRepay(db, at({ tokenId: 7n, amount: 100_000_000n }, BLUE_CHIP));
+      await onRepay(db, at({ tokenId: 7n, amount: 400_000_123n }, BLUE_CHIP)); // the rest, with interest
 
       assert.deepEqual(rows(schema.loan), [
         {
@@ -128,14 +129,15 @@ describe("loan handlers", () => {
           everBorrowed: true,
           borrowedUsdg: 500_000_000n,
           repaidUsdg: 500_000_123n,
-          lastActivityAt: timeOf(7),
+          lastActivityAt: timeOf(8),
         },
       ]);
       assert.deepEqual(rows(schema.loanActivity), [
         activityRow(4, "deposit"),
         activityRow(5, "borrow", { amountUsdg: 300_000_000n }),
         activityRow(6, "borrow", { amountUsdg: 200_000_000n }),
-        activityRow(7, "repay", { amountUsdg: 500_000_123n }),
+        activityRow(7, "repay", { amountUsdg: 100_000_000n }),
+        activityRow(8, "repay", { amountUsdg: 400_000_123n }),
       ]);
     });
 
@@ -236,6 +238,17 @@ describe("loan handlers", () => {
   });
 
   describe("edge case", () => {
+    it("only a loan in custody is closed by a burn: a withdrawn one keeps its own closing time", async () => {
+      const { db, rows, at } = await deposited();
+      await onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE }, BLUE_CHIP)); // 5
+      // The market never burns a position it has released; the guard is what says so.
+      await onTransfer(db, at({ from: BLUE_CHIP, to: zeroAddress, tokenId: 7n })); // 6
+
+      assert.deepEqual(rows(schema.loan), [
+        { ...IN_CUSTODY, status: "withdrawn", lastActivityAt: timeOf(5), closedAt: timeOf(5) },
+      ]);
+    });
+
     it("a redeposit starts the loan over; the earlier custody stays in `loan_activity`", async () => {
       const { db, rows, at } = await deposited();
       await onBorrow(db, at({ tokenId: 7n, amount: 300_000_000n }, BLUE_CHIP)); // 5

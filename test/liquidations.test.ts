@@ -190,6 +190,19 @@ describe("liquidation handlers", () => {
   });
 
   describe("edge case", () => {
+    it("a full liquidation that covers the debt: `full` comes from the burn, not from bad debt", async () => {
+      const { db, rows, at } = await borrowed();
+      const burn = at({ from: MARKET, to: zeroAddress, tokenId: 7n });
+      await onTransfer(db, burn);
+      await onLiquidate(
+        db,
+        nextLog(burn, { tokenId: 7n, liquidator: KEEPER, repaid: 300_000_010n, out0: 0n, out1: 0n, badDebt: 0n }, MARKET),
+      );
+
+      const { full, badDebtUsdg } = rows(schema.liquidation)[0] as Record<string, unknown>;
+      assert.deepEqual({ full, badDebtUsdg }, { full: true, badDebtUsdg: 0n });
+    });
+
     it("bad debt the reserve covered in full: `badDebt` is set, nothing is socialized", async () => {
       const { db, rows, at } = await borrowed();
       const burn = at({ from: MARKET, to: zeroAddress, tokenId: 7n });
