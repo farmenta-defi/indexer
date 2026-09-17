@@ -122,6 +122,25 @@ $ curl -s "localhost:42069/pools/0x52b9…34f6?t=1789657500" | jq '{effectiveLtB
 { "effectiveLtBps": 7078, "rampRunning": true, "observationAgeSeconds": "1506" }
 ```
 
+**Read the LT from `/pools`, never from the `ltBps` column.** `ltBps` is the LT from `list` or
+the last `updateTerms`. Once a ramp is scheduled the threshold in force comes from the ramp,
+and after `rampStart + rampDuration` it stays at `rampLtTargetBps` until the next
+`updateTerms`, while `ltBps` still holds the value from before the ramp. GraphQL serves the
+raw columns, so a GraphQL consumer has to apply `effectiveLtBps` (src/lib/ramp.ts) itself.
+
+**`t` is the reader's clock, the rows are the last indexed block.** `t` defaults to the
+server's time, and the response does not say how far the indexer has got. If the indexer lags,
+`observationAgeSeconds` grows although nothing on chain is stale (a false 600-second alert),
+and `rampRunning` is `false` for a ramp scheduled in a block not indexed yet, so a keeper
+would skip its 60-second wait. The scheduler (FAR-18) and the keeper (FAR-19) should read
+`/status` first and distrust the answer when the lag is past the FAR-36 threshold.
+
+A pool whose `currency0` is null is listed but not initialized yet: nothing can be recorded
+or deposited for it, so treat it as not active.
+
+`twap_pool.recordedCount` counts `Recorded` events. It is not the contract's
+`observationCount`, which stops at the ring-buffer capacity: that is `min(recordedCount, 2048)`.
+
 `uint128` values and timestamps are decimal strings, as in GraphQL. `debtCapUsdg` is USDG
 with 6 decimals; `minPositionUsd` is USD 1e18 (spec §6.5).
 
