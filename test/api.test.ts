@@ -164,6 +164,7 @@ describe("api", () => {
         "/loans?market=alice",
         "/loans?status=open",
         "/portfolio/0x123",
+        `/portfolio/${zeroAddress}`,
         "/pools?t=now",
         "/pools/0x1234",
       ]) {

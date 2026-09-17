@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { and, asc, eq, type ReadonlyDrizzle } from "ponder";
-import { isAddress, isHex, type Address } from "viem";
+import { isAddress, isHex, zeroAddress, type Address } from "viem";
 
 import { LOAN_STATUS, TIER } from "../lib/loan.ts";
 import { observationAgeAt, parseTime, rampStatusAt, toJson } from "../lib/poolView.ts";
@@ -125,6 +125,8 @@ export function createApp(db: ReadonlyDrizzle<Schema>, schema: Schema) {
   app.get("/portfolio/:address", async (c) => {
     const address = parseAddress(c.req.param("address"));
     if (address === null) return c.json({ error: "address must be an address" }, 400);
+    // The zero address "holds" every burned position on the chain.
+    if (address === zeroAddress) return c.json({ error: "the zero address has no portfolio" }, 400);
 
     const positions = await db
       .select()
