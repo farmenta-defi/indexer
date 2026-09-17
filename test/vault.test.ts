@@ -28,7 +28,7 @@ async function depositedForAlice() {
   const at = chain();
   const mint = at({ from: zeroAddress, to: ALICE, value: 990n }, MARKET);
   await onShareTransfer(store.db, mint);
-  await onDeposit(store.db, nextLog(mint, { sender: ROUTER, owner: ALICE, assets: 1_000n, shares: 990n }));
+  await onDeposit(store.db, nextLog(mint, { sender: getAddress(ROUTER), owner: getAddress(ALICE), assets: 1_000n, shares: 990n }));
   return { ...store, at };
 }
 
@@ -47,7 +47,10 @@ describe("vault handlers", () => {
       const { db, rows, at } = await depositedForAlice();
       const burn = at({ from: ALICE, to: zeroAddress, value: 400n }, MARKET);
       await onShareTransfer(db, burn);
-      await onWithdraw(db, nextLog(burn, { sender: ALICE, receiver: BOB, owner: ALICE, assets: 410n, shares: 400n }));
+      await onWithdraw(
+        db,
+        nextLog(burn, { sender: getAddress(ALICE), receiver: getAddress(BOB), owner: getAddress(ALICE), assets: 410n, shares: 400n }),
+      );
 
       assert.deepEqual(rows(schema.vaultActivity).at(-1), {
         ...logRow(2, 1),

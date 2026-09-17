@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { numberToHex, zeroAddress, type Address, type Hex } from "viem";
+import { getAddress, numberToHex, zeroAddress, type Address, type Hex } from "viem";
 
 import { UNISWAP } from "../config/uniswap.ts";
 import * as schema from "../ponder.schema.ts";
@@ -100,16 +100,18 @@ describe("liquidation handlers", () => {
       await onTransfer(db, burn);
       const removal = nextLog(burn, modify(-1_000n));
       await onModifyLiquidity(db, removal);
-      const loss = nextLog(removal, { amount: 40_000_000n }, MARKET);
+      // The payout's ERC-20 transfer and `ReservesUpdated` sit in between; neither is indexed.
+      const reservesUpdated = nextLog(nextLog(removal, null), null, MARKET);
+      const loss = nextLog(reservesUpdated, { amount: 40_000_000n });
       await onBadDebtSocialized(db, loss);
       await onLiquidate(
         db,
-        nextLog(loss, { tokenId: 7n, liquidator: KEEPER, repaid: 250_000_000n, out0: 9n, out1: 262_500_000n, badDebt: 50_000_000n }),
+        nextLog(loss, { tokenId: 7n, liquidator: getAddress(KEEPER), repaid: 250_000_000n, out0: 9n, out1: 262_500_000n, badDebt: 50_000_000n }),
       );
 
       assert.deepEqual(rows(schema.liquidation), [
         {
-          ...liquidationRow(5, 3),
+          ...liquidationRow(5, 5),
           full: true,
           repaidUsdg: 250_000_000n,
           badDebtUsdg: 50_000_000n,
@@ -122,7 +124,7 @@ describe("liquidation handlers", () => {
         {
           market: MARKET,
           blockNumber: blockOf(5),
-          logIndex: logIndexOf(5) + 2,
+          logIndex: logIndexOf(5) + 4,
           timestamp: timeOf(5),
           transactionHash: txOf(5),
           amountUsdg: 40_000_000n,
