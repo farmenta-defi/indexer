@@ -14,8 +14,8 @@
     "codegen": "ponder codegen",
     "typecheck": "tsc --noEmit",
     "abi:sync": "node scripts/sync-abis.mjs",
-    "db:up": "docker compose up -d --wait postgres",
-    "db:down": "docker compose down"
+    "db:up": "docker compose --env-file .env.local up -d --wait postgres",
+    "db:down": "docker compose --env-file .env.local down"
   },
   "dependencies": {
     "hono": "^4.12.32",

@@ -1,7 +1,7 @@
 # dependencies
 node_modules/
 
-# secrets: only .env.example is committed
+# secrets live in .env.local; only .env.example is committed
 .env
 .env.*
 !.env.example
