@@ -3,7 +3,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { zeroAddress } from "viem";
+import { numberToHex, zeroAddress, type Hex } from "viem";
+
+import { UNISWAP } from "../config/uniswap.ts";
 
 import {
   onHookAllowlisted,
@@ -13,7 +15,8 @@ import {
   onPoolTermsUpdated,
   onTokenConfigured,
 } from "../src/handlers/collateralPolicy.ts";
-import { onInitialize } from "../src/handlers/poolManager.ts";
+import { onInitialize, onModifyLiquidity } from "../src/handlers/poolManager.ts";
+import { onTransfer } from "../src/handlers/positionManager.ts";
 import { onRecorded } from "../src/handlers/twapRecorder.ts";
 import { chain } from "./support/events.ts";
 import { fakeDb } from "./support/fakeDb.ts";
@@ -26,9 +29,11 @@ const USDG = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
 const FEED = "0x61b7e5650328764b076a108eff5fa7282a1b9ad2";
 const HOOK = "0x78257a554194c3ba10a59357b500788934f34080";
 // ETH/USDG fee 500 and fee 460 on Robinhood Chain; ids as pinned in test/poolKey.test.ts.
-const LISTED_ID = "0x387bf619da4d3fb62bb276482693dba1b9b3520f573cabdfe033384a24125982";
+const LISTED_ID: Hex = "0x387bf619da4d3fb62bb276482693dba1b9b3520f573cabdfe033384a24125982";
 const UNLISTED_ID = "0x54f7883914619af9105355bf83ed678bcf9f63560218ac61c9963b9503d0ba32";
-const tx = (n: number) => `0x${"0".repeat(63)}${n.toString(16)}`;
+const ALICE = "0x00000000000000000000000000000000000a11ce";
+const BOB = "0x0000000000000000000000000000000000000b0b";
+const tx = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
 
 /** One of each event, in an order the contracts allow. */
 async function replay() {
@@ -45,6 +50,24 @@ async function replay() {
   await onLtRampScheduled(db, at({ poolId: LISTED_ID, ltFromBps: 7400, ltTargetBps: 6000, start: 2_000_000, duration: 1_000 })); // 8
   await onRecorded(db, at({ poolId: LISTED_ID, index: 0, timestamp: 5_000n, tickCumulative: 0n })); // 9
   await onRecorded(db, at({ poolId: LISTED_ID, index: 1, timestamp: 5_300n, tickCumulative: -59_455_200n })); // 10
+
+  // FAR-35. Position 7 is minted, grown and handed on; position 8 is minted and burned.
+  const liquidity = (tokenId: bigint, liquidityDelta: bigint) => ({
+    id: LISTED_ID,
+    sender: UNISWAP.positionManager.address,
+    tickLower: -198_020,
+    tickUpper: -197_970,
+    liquidityDelta,
+    salt: numberToHex(tokenId, { size: 32 }),
+  });
+  await onTransfer(db, at({ from: zeroAddress, to: ALICE, tokenId: 7n })); // 11
+  await onModifyLiquidity(db, at(liquidity(7n, 1_000n))); // 12
+  await onModifyLiquidity(db, at(liquidity(7n, 250n))); // 13
+  await onTransfer(db, at({ from: ALICE, to: BOB, tokenId: 7n })); // 14
+  await onTransfer(db, at({ from: zeroAddress, to: ALICE, tokenId: 8n })); // 15
+  await onModifyLiquidity(db, at(liquidity(8n, 600n))); // 16
+  await onTransfer(db, at({ from: ALICE, to: zeroAddress, tokenId: 8n })); // 17
+  await onModifyLiquidity(db, at(liquidity(8n, -600n))); // 18
   return dump();
 }
 
@@ -149,6 +172,38 @@ const EXPECTED = {
   twap_pool: [
     { poolId: LISTED_ID, lastObservationAt: 5_300n, lastIndex: 1, lastTickCumulative: -59_455_200n, recordedCount: 2 },
   ],
+  position: [
+    {
+      tokenId: 7n,
+      owner: BOB,
+      poolId: LISTED_ID,
+      tickLower: -198_020,
+      tickUpper: -197_970,
+      liquidity: 1_250n,
+      burned: false,
+      mintedBlock: 111n,
+      mintedAt: 1_000_111n,
+      updatedAt: 1_000_114n,
+    },
+    {
+      tokenId: 8n,
+      owner: zeroAddress,
+      poolId: LISTED_ID,
+      tickLower: -198_020,
+      tickUpper: -197_970,
+      liquidity: 0n,
+      burned: true,
+      mintedBlock: 115n,
+      mintedAt: 1_000_115n,
+      updatedAt: 1_000_118n,
+    },
+  ],
+  position_transfer: [
+    { tokenId: 7n, blockNumber: 111n, logIndex: 21, timestamp: 1_000_111n, transactionHash: tx(11), from: zeroAddress, to: ALICE },
+    { tokenId: 7n, blockNumber: 114n, logIndex: 24, timestamp: 1_000_114n, transactionHash: tx(14), from: ALICE, to: BOB },
+    { tokenId: 8n, blockNumber: 115n, logIndex: 25, timestamp: 1_000_115n, transactionHash: tx(15), from: zeroAddress, to: ALICE },
+    { tokenId: 8n, blockNumber: 117n, logIndex: 27, timestamp: 1_000_117n, transactionHash: tx(17), from: ALICE, to: zeroAddress },
+  ],
 };
 
 function sourceFiles(dir: string): string[] {
@@ -204,7 +259,7 @@ describe("reindex", () => {
 
   describe("edge case", () => {
     it("the registrations hand the handlers the store and the event, nothing else", () => {
-      for (const name of ["PoolManager.ts", "CollateralPolicy.ts", "TwapRecorder.ts"]) {
+      for (const name of ["PoolManager.ts", "PositionManager.ts", "CollateralPolicy.ts", "TwapRecorder.ts"]) {
         const calls = readFileSync(join(ROOT, "src", name), "utf8").match(/ponder\.on\([^;]+;/g) ?? [];
         assert.ok(calls.length > 0, name);
         for (const call of calls) {
