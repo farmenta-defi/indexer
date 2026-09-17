@@ -4,7 +4,14 @@ import { getAddress, numberToHex, zeroAddress, type Address, type Hex } from "vi
 
 import { UNISWAP } from "../config/uniswap.ts";
 import * as schema from "../ponder.schema.ts";
-import { onBorrow, onCollateralDeposited, onCollateralWithdrawn, onRepay } from "../src/handlers/farmentaMarket.ts";
+import {
+  onBorrow,
+  onCollateralDeposited,
+  onCollateralWithdrawn,
+  onCollectFees,
+  onLiquidityChanged,
+  onRepay,
+} from "../src/handlers/farmentaMarket.ts";
 import { onModifyLiquidity } from "../src/handlers/poolManager.ts";
 import { onTransfer } from "../src/handlers/positionManager.ts";
 import { blockOf, chain, logIndexOf, timeOf, txOf } from "./support/events.ts";
@@ -15,6 +22,7 @@ const MEME: Address = "0x000000000000000000000000000000000000e3e0";
 const ALICE: Address = "0x00000000000000000000000000000000000a11ce";
 const BOB: Address = "0x0000000000000000000000000000000000000b0b";
 const POOL: Hex = "0x387bf619da4d3fb62bb276482693dba1b9b3520f573cabdfe033384a24125982";
+const OTHER_POOL: Hex = "0x54f7883914619af9105355bf83ed678bcf9f63560218ac61c9963b9503d0ba32";
 
 const modify = (tokenId: bigint, liquidityDelta: bigint) => ({
   id: POOL,
@@ -58,8 +66,10 @@ const IN_CUSTODY = {
   closedAt: null,
 };
 
-const activityRow = (n: number, kind: string, amountUsdg: bigint | null, market: Address = BLUE_CHIP) => ({
-  market,
+const NO_FIGURES = { amountUsdg: null, liquidityDelta: null, amount0: null, amount1: null };
+
+const activityRow = (n: number, kind: string, figures: Partial<Record<keyof typeof NO_FIGURES, bigint>> = {}) => ({
+  market: BLUE_CHIP,
   blockNumber: blockOf(n),
   logIndex: logIndexOf(n),
   timestamp: timeOf(n),
@@ -67,7 +77,8 @@ const activityRow = (n: number, kind: string, amountUsdg: bigint | null, market:
   tokenId: 7n,
   owner: ALICE,
   kind,
-  amountUsdg,
+  ...NO_FIGURES,
+  ...figures,
 });
 
 describe("loan handlers", () => {
@@ -78,7 +89,7 @@ describe("loan handlers", () => {
       const { rows } = await deposited();
 
       assert.deepEqual(rows(schema.loan), [IN_CUSTODY]);
-      assert.deepEqual(rows(schema.loanActivity), [activityRow(4, "deposit", null)]);
+      assert.deepEqual(rows(schema.loanActivity), [activityRow(4, "deposit")]);
       // The NFT is the market's now; the depositor is on the loan.
       assert.equal(rows(schema.position)[0]?.owner, BLUE_CHIP);
     });
@@ -101,7 +112,7 @@ describe("loan handlers", () => {
       assert.deepEqual(rows(schema.loan), [
         { ...IN_CUSTODY, status: "withdrawn", lastActivityAt: timeOf(5), closedAt: timeOf(5) },
       ]);
-      assert.deepEqual(rows(schema.loanActivity), [activityRow(4, "deposit", null), activityRow(5, "withdraw", null)]);
+      assert.deepEqual(rows(schema.loanActivity), [activityRow(4, "deposit"), activityRow(5, "withdraw")]);
       assert.equal(rows(schema.position)[0]?.owner, BOB);
     });
 
@@ -121,11 +132,32 @@ describe("loan handlers", () => {
         },
       ]);
       assert.deepEqual(rows(schema.loanActivity), [
-        activityRow(4, "deposit", null),
-        activityRow(5, "borrow", 300_000_000n),
-        activityRow(6, "borrow", 200_000_000n),
-        activityRow(7, "repay", 500_000_123n),
+        activityRow(4, "deposit"),
+        activityRow(5, "borrow", { amountUsdg: 300_000_000n }),
+        activityRow(6, "borrow", { amountUsdg: 200_000_000n }),
+        activityRow(7, "repay", { amountUsdg: 500_000_123n }),
       ]);
+    });
+
+    it("adding, removing and claiming fees on collateral: history rows, liquidity from `ModifyLiquidity`", async () => {
+      const { db, rows, at } = await deposited();
+      // Each market call is the PoolManager's `ModifyLiquidity`, then the market's own event.
+      await onModifyLiquidity(db, at(modify(7n, 250n))); // 5
+      await onLiquidityChanged(db, at({ tokenId: 7n, poolId: POOL, liqDelta: 250n }, BLUE_CHIP)); // 6
+      await onModifyLiquidity(db, at(modify(7n, -400n))); // 7
+      await onLiquidityChanged(db, at({ tokenId: 7n, poolId: POOL, liqDelta: -400n }, BLUE_CHIP)); // 8
+      await onModifyLiquidity(db, at(modify(7n, 0n))); // 9
+      await onCollectFees(db, at({ tokenId: 7n, poolId: POOL, amount0: 11n, amount1: 22_000n }, BLUE_CHIP)); // 10
+
+      assert.deepEqual(rows(schema.loanActivity), [
+        activityRow(4, "deposit"),
+        activityRow(6, "increase_liquidity", { liquidityDelta: 250n }),
+        activityRow(8, "decrease_liquidity", { liquidityDelta: -400n }),
+        activityRow(10, "collect_fees", { amount0: 11n, amount1: 22_000n }),
+      ]);
+      assert.deepEqual(rows(schema.loan), [{ ...IN_CUSTODY, lastActivityAt: timeOf(10) }]);
+      // Counted once, from the PoolManager's event.
+      assert.equal(rows(schema.position)[0]?.liquidity, 850n);
     });
 
     it("a full liquidation burns the position, and the burn closes the loan", async () => {
@@ -169,6 +201,20 @@ describe("loan handlers", () => {
       await assert.rejects(onBorrow(db, at({ tokenId: 7n, amount: 1n }, BLUE_CHIP)), /never took into custody/);
       await assert.rejects(onRepay(db, at({ tokenId: 7n, amount: 1n }, BLUE_CHIP)), /never took into custody/);
       await assert.rejects(onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE }, BLUE_CHIP)), /never took into custody/);
+      await assert.rejects(
+        onLiquidityChanged(db, at({ tokenId: 7n, poolId: POOL, liqDelta: 1n }, BLUE_CHIP)),
+        /never took into custody/,
+      );
+      await assert.rejects(
+        onCollectFees(db, at({ tokenId: 7n, poolId: POOL, amount0: 0n, amount1: 0n }, BLUE_CHIP)),
+        /never took into custody/,
+      );
+    });
+
+    it("refuses a market event that names another pool than the position's", async () => {
+      const { db, at } = await deposited();
+      const event = at({ tokenId: 7n, poolId: OTHER_POOL, liqDelta: 1n }, BLUE_CHIP);
+      await assert.rejects(onLiquidityChanged(db, event), /event names pool/);
     });
 
     it("an event from the other market does not reach this market's loan", async () => {
@@ -214,7 +260,7 @@ describe("loan handlers", () => {
       );
     });
 
-    it("a loan on a position whose mint was never seen (START_BLOCK_FLOOR) has a null pool", async () => {
+    it("a loan on a position whose mint was never seen (START_BLOCK_FLOOR) has a null pool, until an event names it", async () => {
       const { db, rows } = fakeDb();
       const at = chain();
       await onTransfer(db, at({ from: ALICE, to: BLUE_CHIP, tokenId: 7n }));
@@ -223,6 +269,10 @@ describe("loan handlers", () => {
       assert.deepEqual(rows(schema.loan), [
         { ...IN_CUSTODY, poolId: null, depositedBlock: blockOf(2), depositedAt: timeOf(2), lastActivityAt: timeOf(2) },
       ]);
+
+      // `LiquidityChanged` and `CollectFees` carry the pool themselves, and fill it in.
+      await onCollectFees(db, at({ tokenId: 7n, poolId: POOL, amount0: 0n, amount1: 0n }, BLUE_CHIP));
+      assert.equal(rows(schema.loan)[0]?.poolId, POOL);
     });
   });
 });

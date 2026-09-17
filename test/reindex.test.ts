@@ -19,7 +19,9 @@ import {
   onBadDebtSocialized,
   onBorrow,
   onCollateralDeposited,
+  onCollectFees,
   onLiquidate,
+  onLiquidityChanged,
   onRepay,
 } from "../src/handlers/farmentaMarket.ts";
 import { onInitialize, onModifyLiquidity } from "../src/handlers/poolManager.ts";
@@ -103,6 +105,14 @@ async function replay() {
   const redeem = at({ from: ALICE, to: zeroAddress, value: 400n }, MARKET); // 26
   await onShareTransfer(db, redeem);
   await onWithdraw(db, nextLog(redeem, { sender: ALICE, receiver: BOB, owner: ALICE, assets: 410n, shares: 400n }));
+
+  // Position 9 is minted into custody (`mintAndDeposit`), grown, and its fees are claimed.
+  await onTransfer(db, at({ from: zeroAddress, to: MARKET, tokenId: 9n })); // 27
+  await onModifyLiquidity(db, at(liquidity(9n, 700n))); // 28
+  await onCollateralDeposited(db, at({ tokenId: 9n, owner: ALICE }, MARKET)); // 29
+  await onModifyLiquidity(db, at(liquidity(9n, 50n))); // 30
+  await onLiquidityChanged(db, at({ tokenId: 9n, poolId: LISTED_ID, liqDelta: 50n }, MARKET)); // 31
+  await onCollectFees(db, at({ tokenId: 9n, poolId: LISTED_ID, amount0: 11n, amount1: 22_000n }, MARKET)); // 32
   return dump();
 }
 
@@ -114,6 +124,8 @@ const terms = (ltBps: number) => ({
   debtCapUsdg: 500_000_000_000n,
   minPositionUsd: 50_000_000_000_000_000_000n,
 });
+
+const NO_FIGURES = { amountUsdg: null, liquidityDelta: null, amount0: null, amount1: null };
 
 const activity = (n: number) => ({
   market: MARKET,
@@ -240,6 +252,18 @@ const EXPECTED = {
       mintedAt: 1_000_115n,
       updatedAt: 1_000_118n,
     },
+    {
+      tokenId: 9n,
+      owner: MARKET,
+      poolId: LISTED_ID,
+      tickLower: -198_020,
+      tickUpper: -197_970,
+      liquidity: 750n,
+      burned: false,
+      mintedBlock: 127n,
+      mintedAt: 1_000_127n,
+      updatedAt: 1_000_130n,
+    },
   ],
   position_transfer: [
     { tokenId: 7n, blockNumber: 111n, logIndex: 21, timestamp: 1_000_111n, transactionHash: tx(11), from: zeroAddress, to: ALICE },
@@ -248,6 +272,7 @@ const EXPECTED = {
     { tokenId: 7n, blockNumber: 123n, logIndex: 33, timestamp: 1_000_123n, transactionHash: tx(23), from: MARKET, to: zeroAddress },
     { tokenId: 8n, blockNumber: 115n, logIndex: 25, timestamp: 1_000_115n, transactionHash: tx(15), from: zeroAddress, to: ALICE },
     { tokenId: 8n, blockNumber: 117n, logIndex: 27, timestamp: 1_000_117n, transactionHash: tx(17), from: ALICE, to: zeroAddress },
+    { tokenId: 9n, blockNumber: 127n, logIndex: 37, timestamp: 1_000_127n, transactionHash: tx(27), from: zeroAddress, to: MARKET },
   ],
   loan: [
     {
@@ -265,11 +290,29 @@ const EXPECTED = {
       lastActivityAt: 1_000_123n,
       closedAt: 1_000_123n,
     },
+    {
+      market: MARKET,
+      tokenId: 9n,
+      owner: ALICE,
+      poolId: LISTED_ID,
+      status: "in_custody",
+      everBorrowed: false,
+      borrowedUsdg: 0n,
+      repaidUsdg: 0n,
+      liquidatedUsdg: 0n,
+      depositedBlock: 129n,
+      depositedAt: 1_000_129n,
+      lastActivityAt: 1_000_132n,
+      closedAt: null,
+    },
   ],
   loan_activity: [
-    { ...activity(20), tokenId: 7n, owner: BOB, kind: "deposit", amountUsdg: null },
-    { ...activity(21), tokenId: 7n, owner: BOB, kind: "borrow", amountUsdg: 300_000_000n },
-    { ...activity(22), tokenId: 7n, owner: BOB, kind: "repay", amountUsdg: 100_000_000n },
+    { ...activity(20), tokenId: 7n, owner: BOB, kind: "deposit", ...NO_FIGURES },
+    { ...activity(21), tokenId: 7n, owner: BOB, kind: "borrow", ...NO_FIGURES, amountUsdg: 300_000_000n },
+    { ...activity(22), tokenId: 7n, owner: BOB, kind: "repay", ...NO_FIGURES, amountUsdg: 100_000_000n },
+    { ...activity(29), tokenId: 9n, owner: ALICE, kind: "deposit", ...NO_FIGURES },
+    { ...activity(31), tokenId: 9n, owner: ALICE, kind: "increase_liquidity", ...NO_FIGURES, liquidityDelta: 50n },
+    { ...activity(32), tokenId: 9n, owner: ALICE, kind: "collect_fees", ...NO_FIGURES, amount0: 11n, amount1: 22_000n },
   ],
   // Logs 33 to 36 of the transaction opened by event 23.
   liquidation: [
