@@ -66,8 +66,8 @@ you can still run the indexer locally by setting `START_BLOCK_FLOOR` to a recent
 lifts every start block; expect 429 warnings while it catches up. Never set it in production.
 Keep the floor at or below the block the first Farmenta contract was deployed in: a
 `PoolTermsUpdated`, `PoolFrozen` or `LtRampScheduled` for a pool whose `PoolListed` was skipped,
-or a `Borrow`, `Repay` or `Liquidate` for a loan whose `CollateralDeposited` was skipped, stops
-the indexer, because a row that cannot be right is worse than no row. Positions are the
+a `CollateralWithdrawn`, `Borrow`, `Repay` or `Liquidate` for a loan whose `CollateralDeposited`
+was skipped, or vault shares leaving a holder whose deposit was skipped, stops the indexer, because a row that cannot be right is worse than no row. Positions are the
 exception, as their mints go back to block 9,073: one minted before the floor is left out
 silently, and a loan on it has a null `poolId`, so it never shows up as a keeper candidate.
 
@@ -210,7 +210,7 @@ Positions and loans:
 
 | Route | Returns |
 |---|---|
-| `/portfolio/:address` | `positions`: the NFTs in the address's wallet. `loans`: the ones a market holds for it (`status = in_custody`) |
+| `/portfolio/:address` | Not the zero address. `positions`: the NFTs in the address's wallet. `loans`: the ones a market holds for it (`status = in_custody`) |
 | `/loans?owner=&market=&status=` | Loans, every filter optional. `/loans?status=in_custody` is the list FAR-38 snapshots HF for |
 | `/loans/keeper-candidates` | Loans still in custody, on a meme pool (`pool.tier = 2`), that have ever borrowed |
 
