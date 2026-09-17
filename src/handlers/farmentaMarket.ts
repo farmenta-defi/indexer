@@ -1,4 +1,4 @@
-import type { Address } from "viem";
+import type { Address, Hex } from "viem";
 
 import { badDebtSocialized, liquidation, loan, loanActivity, position } from "../../ponder.schema.ts";
 import { LOAN_STATUS } from "../lib/loan.ts";
@@ -6,14 +6,22 @@ import { lower, marketLogKey, type Db, type Log } from "./event.ts";
 
 // Both markets emit these; `event.log.address` says which one (ponder.config.ts).
 
-type Kind = "deposit" | "withdraw" | "borrow" | "repay";
+type Kind = "deposit" | "withdraw" | "borrow" | "repay" | "increase_liquidity" | "decrease_liquidity" | "collect_fees";
 
-const activity = (event: Log<{ tokenId: bigint }>, owner: Address, kind: Kind, amountUsdg: bigint | null) => ({
+const NO_FIGURES = { amountUsdg: null, liquidityDelta: null, amount0: null, amount1: null };
+
+const activity = (
+  event: Log<{ tokenId: bigint }>,
+  owner: Address,
+  kind: Kind,
+  figures: Partial<Record<keyof typeof NO_FIGURES, bigint>> = {},
+) => ({
   ...marketLogKey(event),
   tokenId: event.args.tokenId,
   owner,
   kind,
-  amountUsdg,
+  ...NO_FIGURES,
+  ...figures,
 });
 
 // Emitted by `depositCollateral`, `depositCollateralWithPermit`, `mintAndDeposit` and the
@@ -40,7 +48,7 @@ export async function onCollateralDeposited(db: Db, event: Log<{ tokenId: bigint
   };
   // A conflict is a redeposit: the earlier loan was deleted on chain, so the row starts over.
   await db.insert(loan).values({ market, tokenId, ...row }).onConflictDoUpdate(row);
-  await db.insert(loanActivity).values(activity(event, owner, "deposit", null));
+  await db.insert(loanActivity).values(activity(event, owner, "deposit"));
 }
 
 export async function onCollateralWithdrawn(db: Db, event: Log<{ tokenId: bigint; owner: Address }>) {
@@ -54,7 +62,7 @@ export async function onCollateralWithdrawn(db: Db, event: Log<{ tokenId: bigint
     lastActivityAt: event.block.timestamp,
     closedAt: event.block.timestamp,
   });
-  await db.insert(loanActivity).values(activity(event, lower(event.args.owner), "withdraw", null));
+  await db.insert(loanActivity).values(activity(event, lower(event.args.owner), "withdraw"));
 }
 
 export async function onBorrow(db: Db, event: Log<{ tokenId: bigint; amount: bigint }>) {
@@ -68,7 +76,7 @@ export async function onBorrow(db: Db, event: Log<{ tokenId: bigint; amount: big
     borrowedUsdg: held.borrowedUsdg + amount,
     lastActivityAt: event.block.timestamp,
   });
-  await db.insert(loanActivity).values(activity(event, held.owner, "borrow", amount));
+  await db.insert(loanActivity).values(activity(event, held.owner, "borrow", { amountUsdg: amount }));
 }
 
 // `amount` is what was actually taken, after the cap at the outstanding debt. `everBorrowed`
@@ -83,7 +91,44 @@ export async function onRepay(db: Db, event: Log<{ tokenId: bigint; amount: bigi
     repaidUsdg: held.repaidUsdg + amount,
     lastActivityAt: event.block.timestamp,
   });
-  await db.insert(loanActivity).values(activity(event, held.owner, "repay", amount));
+  await db.insert(loanActivity).values(activity(event, held.owner, "repay", { amountUsdg: amount }));
+}
+
+// `LiquidityChanged` and `CollectFees` already carry the loan's `poolKeyId` (the other events
+// follow in FAR-42). It fills a pool that START_BLOCK_FLOOR left null, and must agree with
+// one taken from `position`: a mismatch means the salt-to-tokenId join is wrong.
+async function touch(db: Db, event: Log<{ tokenId: bigint; poolId: Hex }>) {
+  const market = lower(event.log.address);
+  const { tokenId, poolId } = event.args;
+  const held = await db.find(loan, { market, tokenId });
+  if (!held) throw new Error(`${market} changed position ${tokenId}, which it never took into custody`);
+  if (held.poolId !== null && held.poolId !== poolId) {
+    throw new Error(`position ${tokenId} on ${market}: event names pool ${poolId}, the position row ${held.poolId}`);
+  }
+
+  await db.update(loan, { market, tokenId }).set({ poolId, lastActivityAt: event.block.timestamp });
+  return held;
+}
+
+// `increaseLiquidity` and `decreaseLiquidity` on a position in custody. Recorded as history
+// only: the position's liquidity follows `ModifyLiquidity` (poolManager.ts), which also sees
+// the partial liquidations and the burn that emit no `LiquidityChanged`.
+export async function onLiquidityChanged(db: Db, event: Log<{ tokenId: bigint; poolId: Hex; liqDelta: bigint }>) {
+  const held = await touch(db, event);
+  const { liqDelta } = event.args;
+  const kind = liqDelta < 0n ? "decrease_liquidity" : "increase_liquidity";
+  await db.insert(loanActivity).values(activity(event, held.owner, kind, { liquidityDelta: liqDelta }));
+}
+
+// Only `collectFees` emits this; the fee claims inside the two liquidity functions do not
+// (spec §4.1, v0.48). The amounts are `to`'s balance change, not verified fee income.
+export async function onCollectFees(
+  db: Db,
+  event: Log<{ tokenId: bigint; poolId: Hex; amount0: bigint; amount1: bigint }>,
+) {
+  const held = await touch(db, event);
+  const { amount0, amount1 } = event.args;
+  await db.insert(loanActivity).values(activity(event, held.owner, "collect_fees", { amount0, amount1 }));
 }
 
 export async function onBadDebtSocialized(db: Db, event: Log<{ amount: bigint }>) {

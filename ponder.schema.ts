@@ -235,8 +235,9 @@ export const loan = onchainTable(
   }),
 );
 
-// One row per `CollateralDeposited`, `CollateralWithdrawn`, `Borrow` and `Repay`: the
-// borrower side of the transaction history. Liquidations are in `liquidation`.
+// One row per `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`,
+// `LiquidityChanged` and `CollectFees`: the borrower side of the transaction history.
+// Liquidations are in `liquidation`.
 export const loanActivity = onchainTable(
   "loan_activity",
   (t) => ({
@@ -246,12 +247,22 @@ export const loanActivity = onchainTable(
     timestamp: t.bigint().notNull(),
     transactionHash: t.hex().notNull(),
     tokenId: t.bigint().notNull(),
-    // The loan's depositor. `Borrow` and `Repay` do not name anyone, and anyone may repay.
+    // The loan's depositor. Only the two collateral events name anyone, and anyone may repay.
     owner: t.hex().notNull(),
-    // "deposit", "withdraw", "borrow" or "repay".
+    // "deposit", "withdraw", "borrow", "repay", "increase_liquidity", "decrease_liquidity"
+    // or "collect_fees".
     kind: t.text().notNull(),
-    // USDG, 6 decimals. Null for "deposit" and "withdraw".
+    // USDG, 6 decimals. Only for "borrow" and "repay".
     amountUsdg: t.bigint(),
+    // `LiquidityChanged.liqDelta`, signed. Only for the two liquidity kinds. The position's
+    // liquidity itself comes from `ModifyLiquidity`, never from this.
+    liquidityDelta: t.bigint(),
+    // Only for "collect_fees". NOT verified fee income: per the contract's NatSpec they are
+    // `to`'s balance change across the claim, which counts anything else that reached `to`
+    // meanwhile. Fees claimed inside `increaseLiquidity` and `decreaseLiquidity` emit no
+    // `CollectFees` at all (spec §4.1, v0.48), so they are in no row here.
+    amount0: t.bigint(),
+    amount1: t.bigint(),
   }),
   (table) => ({
     pk: primaryKey({ columns: [table.market, table.blockNumber, table.logIndex] }),
