@@ -259,3 +259,58 @@ export const loanActivity = onchainTable(
     tokenIdx: index().on(table.market, table.tokenId),
   }),
 );
+
+// One row per `Liquidate`, partial or full.
+export const liquidation = onchainTable(
+  "liquidation",
+  (t) => ({
+    market: t.hex().notNull(),
+    blockNumber: t.bigint().notNull(),
+    logIndex: t.integer().notNull(),
+    timestamp: t.bigint().notNull(),
+    transactionHash: t.hex().notNull(),
+    tokenId: t.bigint().notNull(),
+    // The liquidated loan's depositor and pool, copied from `loan`.
+    owner: t.hex().notNull(),
+    poolId: t.hex(),
+    liquidator: t.hex().notNull(),
+    // True when the position was seized whole and burned, which closes the loan. A partial
+    // liquidation leaves it in custody.
+    full: t.boolean().notNull(),
+    // Exact ledger figures, USDG with 6 decimals.
+    repaidUsdg: t.bigint().notNull(),
+    badDebtUsdg: t.bigint().notNull(),
+    // The part of `badDebtUsdg` the reserve could not cover, from the `BadDebtSocialized`
+    // of the same transaction; 0 when there was none.
+    socializedUsdg: t.bigint().notNull(),
+    // NOT the amount seized. Per the contract's NatSpec these are what the liquidator's `to`
+    // received, and on the full branch they are measured as `to`'s balance change across the
+    // burn, which a contract `to` can distort (redeem vault shares, pass the ETH on). The
+    // ledger never reads them; do not account with them.
+    out0: t.bigint().notNull(),
+    out1: t.bigint().notNull(),
+  }),
+  (table) => ({
+    pk: primaryKey({ columns: [table.market, table.blockNumber, table.logIndex] }),
+    ownerIdx: index().on(table.owner),
+    liquidatorIdx: index().on(table.liquidator),
+    tokenIdx: index().on(table.market, table.tokenId),
+  }),
+);
+
+// One row per `BadDebtSocialized`: a loss written off against lenders (spec §9). The event
+// names no position; `liquidation.socializedUsdg` is where it is tied to one.
+export const badDebtSocialized = onchainTable(
+  "bad_debt_socialized",
+  (t) => ({
+    market: t.hex().notNull(),
+    blockNumber: t.bigint().notNull(),
+    logIndex: t.integer().notNull(),
+    timestamp: t.bigint().notNull(),
+    transactionHash: t.hex().notNull(),
+    amountUsdg: t.bigint().notNull(),
+  }),
+  (table) => ({
+    pk: primaryKey({ columns: [table.market, table.blockNumber, table.logIndex] }),
+  }),
+);
