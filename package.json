@@ -1,0 +1,29 @@
+{
+  "name": "@farmenta/indexer",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.15.1",
+  "scripts": {
+    "dev": "ponder dev --schema ponder",
+    "start": "ponder start --schema ponder",
+    "codegen": "ponder codegen",
+    "typecheck": "tsc --noEmit",
+    "abi:sync": "node scripts/sync-abis.mjs",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose down"
+  },
+  "dependencies": {
+    "hono": "^4.12.32",
+    "ponder": "0.17.10",
+    "viem": "^2.35.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
+}
