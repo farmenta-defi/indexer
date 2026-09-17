@@ -9,6 +9,7 @@ import { onPoolListed } from "../src/handlers/collateralPolicy.ts";
 import { onBorrow, onCollateralDeposited, onCollateralWithdrawn, onRepay } from "../src/handlers/farmentaMarket.ts";
 import { onModifyLiquidity } from "../src/handlers/poolManager.ts";
 import { onTransfer } from "../src/handlers/positionManager.ts";
+import { onShareTransfer } from "../src/handlers/vault.ts";
 import { blockOf, chain, timeOf } from "./support/events.ts";
 import { fakeDb } from "./support/fakeDb.ts";
 import { pgDb } from "./support/pgDb.ts";
@@ -63,7 +64,7 @@ before(async () => {
   await onTransfer(db, at({ from: ALICE, to: BOB, tokenId: 2n }));
 
   // Meme loans. 11: borrowed, in custody. 12: never borrowed. 13: borrowed, repaid, withdrawn.
-  // 14: borrowed and repaid in full, still in custody. (10 to 31)
+  // 14: borrowed and repaid in full, still in custody. (10 to 32)
   for (const tokenId of [11n, 12n, 13n, 14n]) await mint(tokenId, ALICE, MEME_POOL);
   for (const tokenId of [11n, 12n, 13n, 14n]) await deposit(tokenId, ALICE, MEME);
   await onBorrow(db, at({ tokenId: 11n, amount: 5_000_000n }, MEME));
@@ -74,10 +75,15 @@ before(async () => {
   await onBorrow(db, at({ tokenId: 14n, amount: 7_000_000n }, MEME));
   await onRepay(db, at({ tokenId: 14n, amount: 7_000_002n }, MEME));
 
-  // A blue-chip loan that borrowed: Bob's 21. (32 to 36)
+  // A blue-chip loan that borrowed: Bob's 21. (33 to 37)
   await mint(21n, BOB, BLUE_POOL);
   await deposit(21n, BOB, BLUE_CHIP);
   await onBorrow(db, at({ tokenId: 21n, amount: 9_000_000n }, BLUE_CHIP));
+
+  // Alice lends on both markets, and hands some meme shares to Bob. (38 to 40)
+  await onShareTransfer(db, at({ from: zeroAddress, to: ALICE, value: 990n }, BLUE_CHIP));
+  await onShareTransfer(db, at({ from: zeroAddress, to: ALICE, value: 500n }, MEME));
+  await onShareTransfer(db, at({ from: ALICE, to: BOB, value: 120n }, MEME));
 
   app = createApp(await pgDb(rows), schema);
 });
@@ -124,6 +130,11 @@ describe("api", () => {
       // 13 came back from the market, so it is in the wallet again and no longer a loan.
       assert.deepEqual(tokenIds(body.positions), ["1", "3", "13"]);
       assert.deepEqual(tokenIds(body.loans), ["11", "12", "14"]);
+
+      assert.deepEqual(body.vaultShares, [
+        { market: MEME, account: ALICE, shares: "380", updatedAt: timeOf(40).toString() },
+        { market: BLUE_CHIP, account: ALICE, shares: "990", updatedAt: timeOf(38).toString() },
+      ]);
 
       const bob = await get(`/portfolio/${BOB}`);
       assert.deepEqual(tokenIds(bob.body.positions), ["2"]);
@@ -183,7 +194,10 @@ describe("api", () => {
     it("an address nobody has seen has an empty portfolio, not a 404", async () => {
       const { status, body } = await get(`/portfolio/${zeroAddress.replace(/0$/, "1")}`);
       assert.equal(status, 200);
-      assert.deepEqual({ positions: body.positions, loans: body.loans }, { positions: [], loans: [] });
+      assert.deepEqual(
+        { positions: body.positions, loans: body.loans, vaultShares: body.vaultShares },
+        { positions: [], loans: [], vaultShares: [] },
+      );
     });
   });
 });

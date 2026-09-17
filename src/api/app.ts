@@ -120,7 +120,8 @@ export function createApp(db: ReadonlyDrizzle<Schema>, schema: Schema) {
     return c.json(toJson(rows.map(loanView)));
   });
 
-  // An address's positions: the NFTs in its wallet, and the ones a market holds for it.
+  // An address's positions: the NFTs in its wallet, and the ones a market holds for it;
+  // and its vault shares per market.
   // `PositionManager` has no `ERC721Enumerable`, so this is the only list (spec §12).
   app.get("/portfolio/:address", async (c) => {
     const address = parseAddress(c.req.param("address"));
@@ -136,7 +137,12 @@ export function createApp(db: ReadonlyDrizzle<Schema>, schema: Schema) {
     const inCustody = await loans()
       .where(and(eq(schema.loan.owner, address), eq(schema.loan.status, LOAN_STATUS.inCustody)))
       .orderBy(...inOrder);
-    return c.json(toJson({ address, positions, loans: inCustody.map(loanView) }));
+    const vaultShares = await db
+      .select()
+      .from(schema.vaultBalance)
+      .where(eq(schema.vaultBalance.account, address))
+      .orderBy(asc(schema.vaultBalance.market));
+    return c.json(toJson({ address, positions, loans: inCustody.map(loanView), vaultShares }));
   });
 
   return app;

@@ -221,7 +221,7 @@ Positions and loans:
 
 | Route | Returns |
 |---|---|
-| `/portfolio/:address` | Not the zero address. `positions`: the NFTs in the address's wallet. `loans`: the ones a market holds for it (`status = in_custody`) |
+| `/portfolio/:address` | Not the zero address. `positions`: the NFTs in the address's wallet. `loans`: the ones a market holds for it (`status = in_custody`). `vaultShares`: its `vault_balance` rows, one per market |
 | `/loans?owner=&market=&status=` | Loans, every filter optional. `/loans?status=in_custody` is the list FAR-38 snapshots HF for |
 | `/loans/keeper-candidates` | Loans still in custody, on a meme pool (`pool.tier = 2`), that have ever borrowed |
 
