@@ -46,6 +46,8 @@ export async function onCollateralDeposited(db: Db, event: Log<{ tokenId: bigint
 export async function onCollateralWithdrawn(db: Db, event: Log<{ tokenId: bigint; owner: Address }>) {
   const market = lower(event.log.address);
   const { tokenId } = event.args;
+  const held = await db.find(loan, { market, tokenId });
+  if (!held) throw new Error(`CollateralWithdrawn for position ${tokenId}, which ${market} never took into custody`);
 
   await db.update(loan, { market, tokenId }).set({
     status: LOAN_STATUS.withdrawn,

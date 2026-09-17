@@ -168,7 +168,7 @@ describe("loan handlers", () => {
       const { db, at } = await minted();
       await assert.rejects(onBorrow(db, at({ tokenId: 7n, amount: 1n }, BLUE_CHIP)), /never took into custody/);
       await assert.rejects(onRepay(db, at({ tokenId: 7n, amount: 1n }, BLUE_CHIP)), /never took into custody/);
-      await assert.rejects(onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE }, BLUE_CHIP)));
+      await assert.rejects(onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE }, BLUE_CHIP)), /never took into custody/);
     });
 
     it("an event from the other market does not reach this market's loan", async () => {
