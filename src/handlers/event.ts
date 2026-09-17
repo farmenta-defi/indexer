@@ -16,3 +16,12 @@ export type Log<Args> = {
 
 /** Addresses as the tables key them. A decoded event argument is checksummed, `log.address` is not. */
 export const lower = (address: Address) => address.toLowerCase() as Address;
+
+/** Key and provenance of a row that is one log of a market: both markets share every table. */
+export const marketLogKey = (event: Log<unknown>) => ({
+  market: lower(event.log.address),
+  blockNumber: event.block.number,
+  logIndex: event.log.logIndex,
+  timestamp: event.block.timestamp,
+  transactionHash: event.transaction.hash,
+});

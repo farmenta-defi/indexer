@@ -2,22 +2,14 @@ import type { Address } from "viem";
 
 import { badDebtSocialized, liquidation, loan, loanActivity, position } from "../../ponder.schema.ts";
 import { LOAN_STATUS } from "../lib/loan.ts";
-import { lower, type Db, type Log } from "./event.ts";
+import { lower, marketLogKey, type Db, type Log } from "./event.ts";
 
 // Both markets emit these; `event.log.address` says which one (ponder.config.ts).
 
 type Kind = "deposit" | "withdraw" | "borrow" | "repay";
 
-const logKey = (event: Log<unknown>) => ({
-  market: lower(event.log.address),
-  blockNumber: event.block.number,
-  logIndex: event.log.logIndex,
-  timestamp: event.block.timestamp,
-  transactionHash: event.transaction.hash,
-});
-
 const activity = (event: Log<{ tokenId: bigint }>, owner: Address, kind: Kind, amountUsdg: bigint | null) => ({
-  ...logKey(event),
+  ...marketLogKey(event),
   tokenId: event.args.tokenId,
   owner,
   kind,
@@ -93,7 +85,7 @@ export async function onRepay(db: Db, event: Log<{ tokenId: bigint; amount: bigi
 }
 
 export async function onBadDebtSocialized(db: Db, event: Log<{ amount: bigint }>) {
-  await db.insert(badDebtSocialized).values({ ...logKey(event), amountUsdg: event.args.amount });
+  await db.insert(badDebtSocialized).values({ ...marketLogKey(event), amountUsdg: event.args.amount });
 }
 
 // `liquidate` emits, in this order and with nothing in between: `ReservesUpdated`,
@@ -124,7 +116,7 @@ export async function onLiquidate(
     lastActivityAt: event.block.timestamp,
   });
   await db.insert(liquidation).values({
-    ...logKey(event),
+    ...marketLogKey(event),
     tokenId,
     owner: held.owner,
     poolId: held.poolId,
