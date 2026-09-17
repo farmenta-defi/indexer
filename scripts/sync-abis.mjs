@@ -64,7 +64,19 @@ function prepareCheckout() {
   }
   run("git", ["fetch", "origin"], dir);
   run("git", ["checkout", "--detach", "--force", source.commit], dir);
-  run("git", ["submodule", "update", "--init", "--recursive", "--depth", "1"], dir);
+  run("git", ["submodule", "update", "--init", "--depth", "1"], dir);
+  // Not --recursive: that also pulls each library's own test dependencies, which is most
+  // of the download. The nested submodules the build needs are exactly the ones
+  // remappings.txt points into (lib/<a>/lib/<b>/).
+  const nested = new Set();
+  for (const line of readFileSync(join(dir, "remappings.txt"), "utf8").split("\n")) {
+    const match = line.match(/=(lib\/[^/]+)\/(lib\/[^/]+)\//);
+    if (match) nested.add(`${match[1]} ${match[2]}`);
+  }
+  for (const entry of nested) {
+    const [parent, child] = entry.split(" ");
+    run("git", ["submodule", "update", "--init", "--depth", "1", child], join(dir, parent));
+  }
   return dir;
 }
 
