@@ -1,0 +1,23 @@
+# Local development only. On the VPS the indexer uses the shared Postgres server (README).
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: farmenta_indexer
+      # No password in the repo, not even a dev one: it comes from .env.local (`pnpm db:up`).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.local}
+      POSTGRES_DB: farmenta
+    ports:
+      # 5434, not 5432/5433: lp-monitor-v2's dev database already sits on 5433.
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U farmenta_indexer -d farmenta"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
