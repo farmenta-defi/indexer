@@ -15,6 +15,7 @@ import {
   onPoolTermsUpdated,
   onTokenConfigured,
 } from "../src/handlers/collateralPolicy.ts";
+import { onBorrow, onCollateralDeposited, onRepay } from "../src/handlers/farmentaMarket.ts";
 import { onInitialize, onModifyLiquidity } from "../src/handlers/poolManager.ts";
 import { onTransfer } from "../src/handlers/positionManager.ts";
 import { onRecorded } from "../src/handlers/twapRecorder.ts";
@@ -33,6 +34,7 @@ const LISTED_ID: Hex = "0x387bf619da4d3fb62bb276482693dba1b9b3520f573cabdfe03338
 const UNLISTED_ID = "0x54f7883914619af9105355bf83ed678bcf9f63560218ac61c9963b9503d0ba32";
 const ALICE = "0x00000000000000000000000000000000000a11ce";
 const BOB = "0x0000000000000000000000000000000000000b0b";
+const MARKET = "0x00000000000000000000000000000000000b10e0";
 const tx = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
 
 /** One of each event, in an order the contracts allow. */
@@ -68,6 +70,12 @@ async function replay() {
   await onModifyLiquidity(db, at(liquidity(8n, 600n))); // 16
   await onTransfer(db, at({ from: ALICE, to: zeroAddress, tokenId: 8n })); // 17
   await onModifyLiquidity(db, at(liquidity(8n, -600n))); // 18
+
+  // Position 7 becomes collateral, is borrowed against and partly repaid.
+  await onTransfer(db, at({ from: BOB, to: MARKET, tokenId: 7n })); // 19
+  await onCollateralDeposited(db, at({ tokenId: 7n, owner: BOB }, MARKET)); // 20
+  await onBorrow(db, at({ tokenId: 7n, amount: 300_000_000n }, MARKET)); // 21
+  await onRepay(db, at({ tokenId: 7n, amount: 100_000_000n }, MARKET)); // 22
   return dump();
 }
 
@@ -78,6 +86,14 @@ const terms = (ltBps: number) => ({
   removeHaircutBps: 0,
   debtCapUsdg: 500_000_000_000n,
   minPositionUsd: 50_000_000_000_000_000_000n,
+});
+
+const activity = (n: number) => ({
+  market: MARKET,
+  blockNumber: 100n + BigInt(n),
+  logIndex: 10 + n,
+  timestamp: 1_000_100n + BigInt(n),
+  transactionHash: tx(n),
 });
 
 // Written out by hand from the events above, not captured from a run: event n is in block
@@ -175,7 +191,7 @@ const EXPECTED = {
   position: [
     {
       tokenId: 7n,
-      owner: BOB,
+      owner: MARKET,
       poolId: LISTED_ID,
       tickLower: -198_020,
       tickUpper: -197_970,
@@ -183,7 +199,7 @@ const EXPECTED = {
       burned: false,
       mintedBlock: 111n,
       mintedAt: 1_000_111n,
-      updatedAt: 1_000_114n,
+      updatedAt: 1_000_119n,
     },
     {
       tokenId: 8n,
@@ -201,8 +217,31 @@ const EXPECTED = {
   position_transfer: [
     { tokenId: 7n, blockNumber: 111n, logIndex: 21, timestamp: 1_000_111n, transactionHash: tx(11), from: zeroAddress, to: ALICE },
     { tokenId: 7n, blockNumber: 114n, logIndex: 24, timestamp: 1_000_114n, transactionHash: tx(14), from: ALICE, to: BOB },
+    { tokenId: 7n, blockNumber: 119n, logIndex: 29, timestamp: 1_000_119n, transactionHash: tx(19), from: BOB, to: MARKET },
     { tokenId: 8n, blockNumber: 115n, logIndex: 25, timestamp: 1_000_115n, transactionHash: tx(15), from: zeroAddress, to: ALICE },
     { tokenId: 8n, blockNumber: 117n, logIndex: 27, timestamp: 1_000_117n, transactionHash: tx(17), from: ALICE, to: zeroAddress },
+  ],
+  loan: [
+    {
+      market: MARKET,
+      tokenId: 7n,
+      owner: BOB,
+      poolId: LISTED_ID,
+      status: "in_custody",
+      everBorrowed: true,
+      borrowedUsdg: 300_000_000n,
+      repaidUsdg: 100_000_000n,
+      liquidatedUsdg: 0n,
+      depositedBlock: 120n,
+      depositedAt: 1_000_120n,
+      lastActivityAt: 1_000_122n,
+      closedAt: null,
+    },
+  ],
+  loan_activity: [
+    { ...activity(20), tokenId: 7n, owner: BOB, kind: "deposit", amountUsdg: null },
+    { ...activity(21), tokenId: 7n, owner: BOB, kind: "borrow", amountUsdg: 300_000_000n },
+    { ...activity(22), tokenId: 7n, owner: BOB, kind: "repay", amountUsdg: 100_000_000n },
   ],
 };
 
@@ -259,7 +298,7 @@ describe("reindex", () => {
 
   describe("edge case", () => {
     it("the registrations hand the handlers the store and the event, nothing else", () => {
-      for (const name of ["PoolManager.ts", "PositionManager.ts", "CollateralPolicy.ts", "TwapRecorder.ts"]) {
+      for (const name of ["PoolManager.ts", "PositionManager.ts", "CollateralPolicy.ts", "TwapRecorder.ts", "FarmentaMarket.ts"]) {
         const calls = readFileSync(join(ROOT, "src", name), "utf8").match(/ponder\.on\([^;]+;/g) ?? [];
         assert.ok(calls.length > 0, name);
         for (const call of calls) {
