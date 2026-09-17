@@ -25,6 +25,7 @@ import {
 import { onInitialize, onModifyLiquidity } from "../src/handlers/poolManager.ts";
 import { onTransfer } from "../src/handlers/positionManager.ts";
 import { onRecorded } from "../src/handlers/twapRecorder.ts";
+import { onDeposit, onShareTransfer, onWithdraw } from "../src/handlers/vault.ts";
 import { chain, nextLog } from "./support/events.ts";
 import { fakeDb } from "./support/fakeDb.ts";
 
@@ -93,6 +94,15 @@ async function replay() {
   await onBadDebtSocialized(db, loss);
   const liquidate = { tokenId: 7n, liquidator: KEEPER, repaid: 190_000_000n, out0: 9n, out1: 199_500_000n, badDebt: 10_000_000n };
   await onLiquidate(db, nextLog(loss, liquidate));
+
+  // The vault side: Alice deposits, hands some shares to Bob, and withdraws some.
+  const mint = at({ from: zeroAddress, to: ALICE, value: 990n }, MARKET); // 24
+  await onShareTransfer(db, mint);
+  await onDeposit(db, nextLog(mint, { sender: ALICE, owner: ALICE, assets: 1_000n, shares: 990n }));
+  await onShareTransfer(db, at({ from: ALICE, to: BOB, value: 90n }, MARKET)); // 25
+  const redeem = at({ from: ALICE, to: zeroAddress, value: 400n }, MARKET); // 26
+  await onShareTransfer(db, redeem);
+  await onWithdraw(db, nextLog(redeem, { sender: ALICE, receiver: BOB, owner: ALICE, assets: 410n, shares: 400n }));
   return dump();
 }
 
@@ -279,6 +289,15 @@ const EXPECTED = {
     },
   ],
   bad_debt_socialized: [{ ...activity(23), logIndex: 35, amountUsdg: 4_000_000n }],
+  vault_activity: [
+    { ...activity(24), logIndex: 35, kind: "deposit", sender: ALICE, owner: ALICE, receiver: null, assetsUsdg: 1_000n, shares: 990n },
+    { ...activity(25), kind: "transfer", sender: null, owner: ALICE, receiver: BOB, assetsUsdg: null, shares: 90n },
+    { ...activity(26), logIndex: 37, kind: "withdraw", sender: ALICE, owner: ALICE, receiver: BOB, assetsUsdg: 410n, shares: 400n },
+  ],
+  vault_balance: [
+    { market: MARKET, account: BOB, shares: 90n, updatedAt: 1_000_125n },
+    { market: MARKET, account: ALICE, shares: 500n, updatedAt: 1_000_126n },
+  ],
 };
 
 function sourceFiles(dir: string): string[] {
