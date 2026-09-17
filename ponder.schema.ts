@@ -143,5 +143,7 @@ export const twapPool = onchainTable("twap_pool", (t) => ({
   lastObservationAt: t.bigint().notNull(),
   lastIndex: t.integer().notNull(),
   lastTickCumulative: t.bigint().notNull(),
-  observationCount: t.integer().notNull(),
+  // `Recorded` events seen for the pool. Not the contract's `observationCount`, which stops at
+  // the ring-buffer capacity (2048): that one is `min(recordedCount, 2048)`.
+  recordedCount: t.integer().notNull(),
 }));

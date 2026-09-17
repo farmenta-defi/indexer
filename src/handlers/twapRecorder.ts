@@ -22,6 +22,6 @@ export async function onRecorded(
   const latest = { lastObservationAt: timestamp, lastIndex: index, lastTickCumulative: tickCumulative };
   await db
     .insert(twapPool)
-    .values({ poolId, ...latest, observationCount: 1 })
-    .onConflictDoUpdate((row) => ({ ...latest, observationCount: row.observationCount + 1 }));
+    .values({ poolId, ...latest, recordedCount: 1 })
+    .onConflictDoUpdate((row) => ({ ...latest, recordedCount: row.recordedCount + 1 }));
 }
