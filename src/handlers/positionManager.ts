@@ -2,6 +2,7 @@ import { zeroAddress, type Address } from "viem";
 
 import { position, positionTransfer } from "../../ponder.schema.ts";
 import { lower, type Db, type Log } from "./event.ts";
+import { holdBurn } from "./pendingBurn.ts";
 
 // The PositionManager mints with `Transfer` first and `ModifyLiquidity` after, and burns in
 // the same order, so the row exists before its pool and ticks do, and outlives its liquidity.
@@ -9,6 +10,9 @@ export async function onTransfer(db: Db, event: Log<{ from: Address; to: Address
   const { tokenId } = event.args;
   const from = lower(event.args.from);
   const to = lower(event.args.to);
+
+  // The loan stays open until the `Liquidate` that must follow (pendingBurn.ts).
+  if (to === zeroAddress) await holdBurn(db, event);
 
   if (from === zeroAddress) {
     await db.insert(position).values({

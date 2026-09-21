@@ -331,6 +331,8 @@ const EXPECTED = {
       out1: 199_500_000n,
     },
   ],
+  // The burn of event 23 was confirmed by its `Liquidate`, so nothing is left waiting.
+  pending_burn: [],
   bad_debt_socialized: [{ ...activity(23), logIndex: 35, amountUsdg: 4_000_000n }],
   vault_activity: [
     { ...activity(24), logIndex: 35, kind: "deposit", sender: ALICE, owner: ALICE, receiver: null, assetsUsdg: 1_000n, shares: 990n },

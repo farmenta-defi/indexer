@@ -3,6 +3,7 @@ import type { Address, Hex } from "viem";
 import { badDebtSocialized, liquidation, loan, loanActivity, position } from "../../ponder.schema.ts";
 import { LOAN_STATUS } from "../lib/loan.ts";
 import { lower, marketLogKey, type Db, type Log } from "./event.ts";
+import { releaseBurn } from "./pendingBurn.ts";
 
 // Both markets emit these; `event.log.address` says which one (ponder.config.ts).
 
@@ -166,6 +167,7 @@ export async function onLiquidate(
   const socialized = before?.transactionHash === event.transaction.hash ? before.amountUsdg : 0n;
   // Lenders only lose what the position and the reserve could not cover.
   if (socialized > badDebt) throw new Error(`Liquidate for position ${tokenId}: socialized ${socialized} of ${badDebt}`);
+  await releaseBurn(db, event);
 
   await db.update(loan, { market, tokenId }).set({
     liquidatedUsdg: held.liquidatedUsdg + repaid,

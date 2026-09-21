@@ -8,7 +8,7 @@ import type { Db } from "../../src/handlers/event.ts";
 
 // An in-memory stand-in for Ponder's indexing store, holding the three rules the handlers
 // lean on: `insert` refuses a duplicate primary key, `update` refuses a missing row, and
-// `find` answers null. It has no `client`, so a handler cannot make an `eth_call` here.
+// `find` answers null. `delete` answers whether there was a row, as Ponder's does. It has no `client`, so a handler cannot make an `eth_call` here.
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -77,6 +77,7 @@ export function fakeDb() {
       },
     }),
     find: async (table: object, key: Row) => rowsOf(table).get(keyOf(table, key)) ?? null,
+    delete: async (table: object, key: Row) => rowsOf(table).delete(keyOf(table, key)),
     update: (table: object, key: Row) => ({
       set: async (patch: Patch) => {
         const rows = rowsOf(table);

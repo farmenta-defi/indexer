@@ -181,6 +181,52 @@ describe("liquidation handlers", () => {
       assert.deepEqual(rows(schema.liquidation).map((row) => row.socializedUsdg), [0n, 0n, 0n]);
     });
 
+    it("a full-seizure `Liquidate` with no burn before it in its transaction stops the indexer", async () => {
+      const { db, rows, at } = await borrowed();
+      // The burn is in an earlier transaction: it cannot be this seizure's.
+      await onTransfer(db, at({ from: MARKET, to: zeroAddress, tokenId: 7n }));
+      await assert.rejects(
+        onLiquidate(db, at({ ...liquidate, fullSeizure: true }, MARKET)),
+        /seized position 7 whole, but no burn of it came first/,
+      );
+      assert.deepEqual(rows(schema.liquidation), []);
+    });
+
+    it("a full-seizure `Liquidate` for another position than the one burned stops the indexer", async () => {
+      const { db, at } = await borrowed();
+      const burn = at({ from: MARKET, to: zeroAddress, tokenId: 7n });
+      await onTransfer(db, burn);
+      await onTransfer(db, at({ from: zeroAddress, to: MARKET, tokenId: 8n }));
+      await onCollateralDeposited(db, at({ tokenId: 8n, owner: ALICE }, MARKET));
+      await assert.rejects(
+        onLiquidate(db, nextLog(burn, { ...liquidate, tokenId: 8n, fullSeizure: true }, MARKET)),
+        /seized position 8 whole/,
+      );
+    });
+
+    it("a burn followed by a partial `Liquidate` stops the indexer: the burn is no liquidation", async () => {
+      const { db, at } = await borrowed();
+      const burn = at({ from: MARKET, to: zeroAddress, tokenId: 7n });
+      await onTransfer(db, burn);
+      await assert.rejects(onLiquidate(db, nextLog(burn, liquidate, MARKET)), /burned position 7 in 0x\w+ without a full-seizure Liquidate/);
+    });
+
+    it("a second burn while the first still waits for its `Liquidate` stops the indexer", async () => {
+      const { db, rows, at } = await borrowed();
+      await onTransfer(db, at({ from: zeroAddress, to: MARKET, tokenId: 8n }));
+      await onCollateralDeposited(db, at({ tokenId: 8n, owner: ALICE }, MARKET));
+      await onTransfer(db, at({ from: MARKET, to: zeroAddress, tokenId: 7n }));
+      await assert.rejects(
+        onTransfer(db, at({ from: MARKET, to: zeroAddress, tokenId: 8n })),
+        /burned position 7 in 0x\w+ without a full-seizure Liquidate/,
+      );
+      // Neither burn closed its loan.
+      assert.deepEqual(rows(schema.loan).map(({ tokenId, status }) => ({ tokenId, status })), [
+        { tokenId: 7n, status: "in_custody" },
+        { tokenId: 8n, status: "in_custody" },
+      ]);
+    });
+
     it("refuses a socialized loss larger than the bad debt", async () => {
       const { db, at } = await borrowed();
       const loss = at({ amount: 51n }, MARKET);
@@ -202,6 +248,13 @@ describe("liquidation handlers", () => {
       const { full, badDebtUsdg } = rows(schema.liquidation)[0] as Record<string, unknown>;
       assert.deepEqual({ full, badDebtUsdg }, { full: true, badDebtUsdg: 0n });
       assert.equal(rows(schema.loan)[0]?.status, "liquidated");
+    });
+
+    it("a burn of a position no market holds waits for nothing", async () => {
+      const { db, rows, at } = await borrowed();
+      await onTransfer(db, at({ from: zeroAddress, to: ALICE, tokenId: 8n }));
+      await onTransfer(db, at({ from: ALICE, to: zeroAddress, tokenId: 8n }));
+      assert.deepEqual(rows(schema.pendingBurn), []);
     });
 
     it("bad debt the reserve covered in full: `badDebt` is set, nothing is socialized", async () => {
