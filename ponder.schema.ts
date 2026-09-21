@@ -285,8 +285,8 @@ export const liquidation = onchainTable(
     owner: t.hex().notNull(),
     poolId: t.hex(),
     liquidator: t.hex().notNull(),
-    // True when the position was seized whole and burned, which closes the loan. A partial
-    // liquidation leaves it in custody.
+    // `Liquidate.fullSeizure` (FAR-51): true when the position was seized whole and burned,
+    // which closes the loan, bad debt or not. A partial liquidation leaves it in custody.
     full: t.boolean().notNull(),
     // Exact ledger figures, USDG with 6 decimals.
     repaidUsdg: t.bigint().notNull(),
