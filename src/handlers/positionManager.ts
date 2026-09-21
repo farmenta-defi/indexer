@@ -1,8 +1,8 @@
 import { zeroAddress, type Address } from "viem";
 
-import { loan, position, positionTransfer } from "../../ponder.schema.ts";
-import { LOAN_STATUS } from "../lib/loan.ts";
+import { position, positionTransfer } from "../../ponder.schema.ts";
 import { lower, type Db, type Log } from "./event.ts";
+import { holdBurn } from "./pendingBurn.ts";
 
 // The PositionManager mints with `Transfer` first and `ModifyLiquidity` after, and burns in
 // the same order, so the row exists before its pool and ticks do, and outlives its liquidity.
@@ -11,18 +11,8 @@ export async function onTransfer(db: Db, event: Log<{ from: Address; to: Address
   const from = lower(event.args.from);
   const to = lower(event.args.to);
 
-  // A market only ever burns a position in a full liquidation (spec §8 step 4), which also
-  // deletes the loan on chain. `Liquidate` follows later in the same transaction.
-  if (to === zeroAddress) {
-    const held = await db.find(loan, { market: from, tokenId });
-    if (held?.status === LOAN_STATUS.inCustody) {
-      await db.update(loan, { market: from, tokenId }).set({
-        status: LOAN_STATUS.liquidated,
-        lastActivityAt: event.block.timestamp,
-        closedAt: event.block.timestamp,
-      });
-    }
-  }
+  // The loan stays open until the `Liquidate` that must follow (pendingBurn.ts).
+  if (to === zeroAddress) await holdBurn(db, event);
 
   if (from === zeroAddress) {
     await db.insert(position).values({

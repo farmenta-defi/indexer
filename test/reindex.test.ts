@@ -94,7 +94,7 @@ async function replay() {
   await onModifyLiquidity(db, removal);
   const loss = nextLog(removal, { amount: 4_000_000n }, MARKET);
   await onBadDebtSocialized(db, loss);
-  const liquidate = { tokenId: 7n, liquidator: KEEPER, repaid: 190_000_000n, out0: 9n, out1: 199_500_000n, badDebt: 10_000_000n };
+  const liquidate = { tokenId: 7n, liquidator: KEEPER, repaid: 190_000_000n, out0: 9n, out1: 199_500_000n, badDebt: 10_000_000n, fullSeizure: true };
   await onLiquidate(db, nextLog(loss, liquidate));
 
   // The vault side: Alice deposits, hands some shares to Bob, and withdraws some.
@@ -331,6 +331,8 @@ const EXPECTED = {
       out1: 199_500_000n,
     },
   ],
+  // The burn of event 23 was confirmed by its `Liquidate`, so nothing is left waiting.
+  pending_burn: [],
   bad_debt_socialized: [{ ...activity(23), logIndex: 35, amountUsdg: 4_000_000n }],
   vault_activity: [
     { ...activity(24), logIndex: 35, kind: "deposit", sender: ALICE, owner: ALICE, receiver: null, assetsUsdg: 1_000n, shares: 990n },

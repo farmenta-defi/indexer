@@ -285,8 +285,8 @@ export const liquidation = onchainTable(
     owner: t.hex().notNull(),
     poolId: t.hex(),
     liquidator: t.hex().notNull(),
-    // True when the position was seized whole and burned, which closes the loan. A partial
-    // liquidation leaves it in custody.
+    // `Liquidate.fullSeizure` (FAR-51): true when the position was seized whole and burned,
+    // which closes the loan, bad debt or not. A partial liquidation leaves it in custody.
     full: t.boolean().notNull(),
     // Exact ledger figures, USDG with 6 decimals.
     repaidUsdg: t.bigint().notNull(),
@@ -308,6 +308,18 @@ export const liquidation = onchainTable(
     tokenIdx: index().on(table.market, table.tokenId),
   }),
 );
+
+// A market's burn of a position in custody, waiting for the `Liquidate` that must follow it
+// in the same transaction with `fullSeizure` set (FAR-51). At most one per market: `liquidate`
+// burns and emits before it returns. Empty whenever the indexer is consistent; a row that
+// outlives its transaction is a burn no full liquidation explains, and stops the indexer.
+export const pendingBurn = onchainTable("pending_burn", (t) => ({
+  market: t.hex().primaryKey(),
+  tokenId: t.bigint().notNull(),
+  blockNumber: t.bigint().notNull(),
+  logIndex: t.integer().notNull(),
+  transactionHash: t.hex().notNull(),
+}));
 
 // One row per `BadDebtSocialized`: a loss written off against lenders (spec §9). The event
 // names no position; `liquidation.socializedUsdg` is where it is tied to one.

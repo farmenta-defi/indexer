@@ -100,10 +100,11 @@ identical rows.
 | `twap_pool` | `Recorded` | Newest observation per pool: `last_observation_at` |
 | `position` | PositionManager `Transfer`, PoolManager `ModifyLiquidity` | Every position NFT on the chain: holder, pool, ticks, liquidity, `burned` |
 | `position_transfer` | PositionManager `Transfer` | Every transfer, mint and burn included |
-| `loan` | FarmentaMarket `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `Liquidate`; PositionManager `Transfer` to zero | One row per market and tokenId: depositor, pool, `status`, `everBorrowed`, running totals |
+| `loan` | FarmentaMarket `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `Liquidate` | One row per market and tokenId: depositor, pool, `status`, `everBorrowed`, running totals |
 | `loan_activity` | `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `LiquidityChanged`, `CollectFees` | The borrower side of the transaction history |
 | `liquidation` | `Liquidate`, `BadDebtSocialized` | One row per liquidation, partial or full |
 | `bad_debt_socialized` | `BadDebtSocialized` | Every loss written off against lenders |
+| `pending_burn` | PositionManager `Transfer` to zero, `Liquidate` | A market's burn waiting for its full-seizure `Liquidate`; empty whenever the indexer runs |
 | `vault_activity` | ERC-4626 `Deposit`, `Withdraw`, share `Transfer` | The lender side of the transaction history |
 | `vault_balance` | share `Transfer` | Shares per market and holder: what `balanceOf` returns |
 
@@ -141,7 +142,7 @@ indexed at all, because its liquidity could not be right.
 The market keeps no list of loans on chain, so `loan` is the only one. A row is a position in
 custody of one market; `status` is `in_custody`, `withdrawn` or `liquidated`. A position leaves
 custody in exactly two ways: the depositor withdraws it, or a full liquidation burns it, and
-that `Transfer` to the zero address is what closes the loan. A redeposit starts the row over,
+the `Liquidate` with `fullSeizure` set is what closes the loan, not the burn (FAR-51). A redeposit starts the row over,
 as the contract deletes the loan on withdrawal; the earlier custody stays in `loan_activity`.
 
 **`loan` and `/loans?owner=` hold the current or the last custody only.** When Alice withdraws a
@@ -174,7 +175,15 @@ position cannot be rebuilt here until the contracts emit it.
 
 ### Liquidations
 
-`liquidation.full` is true when the position was seized whole and burned. `repaidUsdg` and
+`liquidation.full` is `Liquidate.fullSeizure`: true when the position was seized whole and
+burned, with or without bad debt (FAR-51). The PositionManager burn that comes first in the same
+transaction is held in `pending_burn` until that `Liquidate` confirms it. The indexer **stops**
+when a full-seizure `Liquidate` finds no burn of its position before it in its transaction, when
+a partial one finds a burn waiting, or when a market emits anything in a later transaction while
+its burn still waits: a burn no full liquidation explains is an error, never a liquidation, so
+a burn on some future path cannot drop a loan from the keeper's list unnoticed.
+
+`repaidUsdg` and
 `badDebtUsdg` are exact ledger figures. `socializedUsdg` is the `BadDebtSocialized` of the same
 transaction, matched as the log right before `Liquidate`, which is how `liquidate` emits them.
 

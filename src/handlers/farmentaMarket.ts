@@ -3,6 +3,7 @@ import type { Address, Hex } from "viem";
 import { badDebtSocialized, liquidation, loan, loanActivity, position } from "../../ponder.schema.ts";
 import { LOAN_STATUS } from "../lib/loan.ts";
 import { lower, marketLogKey, type Db, type Log } from "./event.ts";
+import { noStaleBurn, releaseBurn } from "./pendingBurn.ts";
 
 // Both markets emit these; `event.log.address` says which one (ponder.config.ts).
 
@@ -28,6 +29,7 @@ const activity = (
 // `safeTransferFrom` push alike, always after the NFT reached the market, so the position
 // row is there to take the pool from.
 export async function onCollateralDeposited(db: Db, event: Log<{ tokenId: bigint; owner: Address }>) {
+  await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId } = event.args;
   const owner = lower(event.args.owner);
@@ -52,6 +54,7 @@ export async function onCollateralDeposited(db: Db, event: Log<{ tokenId: bigint
 }
 
 export async function onCollateralWithdrawn(db: Db, event: Log<{ tokenId: bigint; owner: Address }>) {
+  await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId } = event.args;
   const held = await db.find(loan, { market, tokenId });
@@ -66,6 +69,7 @@ export async function onCollateralWithdrawn(db: Db, event: Log<{ tokenId: bigint
 }
 
 export async function onBorrow(db: Db, event: Log<{ tokenId: bigint; amount: bigint }>) {
+  await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId, amount } = event.args;
   const held = await db.find(loan, { market, tokenId });
@@ -82,6 +86,7 @@ export async function onBorrow(db: Db, event: Log<{ tokenId: bigint; amount: big
 // `amount` is what was actually taken, after the cap at the outstanding debt. `everBorrowed`
 // stays true even when that was all of it: only `debtOf` can tell.
 export async function onRepay(db: Db, event: Log<{ tokenId: bigint; amount: bigint }>) {
+  await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId, amount } = event.args;
   const held = await db.find(loan, { market, tokenId });
@@ -98,6 +103,7 @@ export async function onRepay(db: Db, event: Log<{ tokenId: bigint; amount: bigi
 // follow in FAR-42). It fills a pool that START_BLOCK_FLOOR left null, and must agree with
 // one taken from `position`: a mismatch means the salt-to-tokenId join is wrong.
 async function touch(db: Db, event: Log<{ tokenId: bigint; poolId: Hex }>) {
+  await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId, poolId } = event.args;
   const held = await db.find(loan, { market, tokenId });
@@ -132,18 +138,28 @@ export async function onCollectFees(
 }
 
 export async function onBadDebtSocialized(db: Db, event: Log<{ amount: bigint }>) {
+  await noStaleBurn(db, event);
   await db.insert(badDebtSocialized).values({ ...marketLogKey(event), amountUsdg: event.args.amount });
 }
 
 // `liquidate` emits, in this order and with nothing in between: `ReservesUpdated`,
-// `BadDebtSocialized` when lenders took a loss, `Liquidate`. On the full branch the burn,
-// and so the `Transfer` that closed the loan, came earlier in the same transaction.
+// `BadDebtSocialized` when lenders took a loss, `Liquidate`. `fullSeizure` says whether the
+// position was burned and the loan deleted on chain (FAR-51); it is the only thing that
+// closes a loan here, whether or not any bad debt was left.
 export async function onLiquidate(
   db: Db,
-  event: Log<{ tokenId: bigint; liquidator: Address; repaid: bigint; out0: bigint; out1: bigint; badDebt: bigint }>,
+  event: Log<{
+    tokenId: bigint;
+    liquidator: Address;
+    repaid: bigint;
+    out0: bigint;
+    out1: bigint;
+    badDebt: bigint;
+    fullSeizure: boolean;
+  }>,
 ) {
   const market = lower(event.log.address);
-  const { tokenId, repaid, out0, out1, badDebt } = event.args;
+  const { tokenId, repaid, out0, out1, badDebt, fullSeizure } = event.args;
   const held = await db.find(loan, { market, tokenId });
   if (!held) throw new Error(`Liquidate for position ${tokenId}, which ${market} never took into custody`);
 
@@ -157,10 +173,12 @@ export async function onLiquidate(
   const socialized = before?.transactionHash === event.transaction.hash ? before.amountUsdg : 0n;
   // Lenders only lose what the position and the reserve could not cover.
   if (socialized > badDebt) throw new Error(`Liquidate for position ${tokenId}: socialized ${socialized} of ${badDebt}`);
+  await releaseBurn(db, event);
 
   await db.update(loan, { market, tokenId }).set({
     liquidatedUsdg: held.liquidatedUsdg + repaid,
     lastActivityAt: event.block.timestamp,
+    ...(fullSeizure ? { status: LOAN_STATUS.liquidated, closedAt: event.block.timestamp } : {}),
   });
   await db.insert(liquidation).values({
     ...marketLogKey(event),
@@ -168,7 +186,7 @@ export async function onLiquidate(
     owner: held.owner,
     poolId: held.poolId,
     liquidator: lower(event.args.liquidator),
-    full: held.status === LOAN_STATUS.liquidated,
+    full: fullSeizure,
     repaidUsdg: repaid,
     badDebtUsdg: badDebt,
     socializedUsdg: socialized,
