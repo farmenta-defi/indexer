@@ -94,7 +94,7 @@ async function replay() {
   await onModifyLiquidity(db, removal);
   const loss = nextLog(removal, { amount: 4_000_000n }, MARKET);
   await onBadDebtSocialized(db, loss);
-  const liquidate = { tokenId: 7n, liquidator: KEEPER, repaid: 190_000_000n, out0: 9n, out1: 199_500_000n, badDebt: 10_000_000n };
+  const liquidate = { tokenId: 7n, liquidator: KEEPER, repaid: 190_000_000n, out0: 9n, out1: 199_500_000n, badDebt: 10_000_000n, fullSeizure: true };
   await onLiquidate(db, nextLog(loss, liquidate));
 
   // The vault side: Alice deposits, hands some shares to Bob, and withdraws some.

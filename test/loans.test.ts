@@ -9,12 +9,13 @@ import {
   onCollateralDeposited,
   onCollateralWithdrawn,
   onCollectFees,
+  onLiquidate,
   onLiquidityChanged,
   onRepay,
 } from "../src/handlers/farmentaMarket.ts";
 import { onModifyLiquidity } from "../src/handlers/poolManager.ts";
 import { onTransfer } from "../src/handlers/positionManager.ts";
-import { blockOf, chain, logIndexOf, timeOf, txOf } from "./support/events.ts";
+import { blockOf, chain, logIndexOf, nextLog, timeOf, txOf } from "./support/events.ts";
 import { fakeDb } from "./support/fakeDb.ts";
 
 const BLUE_CHIP: Address = "0x00000000000000000000000000000000000b10e0";
@@ -162,11 +163,18 @@ describe("loan handlers", () => {
       assert.equal(rows(schema.position)[0]?.liquidity, 850n);
     });
 
-    it("a full liquidation burns the position, and the burn closes the loan", async () => {
+    it("a full liquidation burns the position, and its `Liquidate` closes the loan", async () => {
       const { db, rows, at } = await deposited();
       await onBorrow(db, at({ tokenId: 7n, amount: 300_000_000n }, BLUE_CHIP));
-      await onTransfer(db, at({ from: BLUE_CHIP, to: zeroAddress, tokenId: 7n }));
-      await onModifyLiquidity(db, at(modify(7n, -1_000n)));
+      // One transaction: the burn, its removal, then `Liquidate` with the flag set.
+      const burn = at({ from: BLUE_CHIP, to: zeroAddress, tokenId: 7n });
+      await onTransfer(db, burn);
+      const removal = nextLog(burn, modify(7n, -1_000n));
+      await onModifyLiquidity(db, removal);
+      // The burn alone does not close it (FAR-51): only `Liquidate` says it was a seizure.
+      assert.equal(rows(schema.loan)[0]?.status, "in_custody");
+      const seized = { tokenId: 7n, liquidator: BOB, repaid: 300_000_000n, out0: 0n, out1: 0n, badDebt: 0n, fullSeizure: true };
+      await onLiquidate(db, nextLog(removal, seized, BLUE_CHIP));
 
       assert.deepEqual(rows(schema.loan), [
         {
@@ -174,6 +182,7 @@ describe("loan handlers", () => {
           status: "liquidated",
           everBorrowed: true,
           borrowedUsdg: 300_000_000n,
+          liquidatedUsdg: 300_000_000n,
           lastActivityAt: timeOf(6),
           closedAt: timeOf(6),
         },

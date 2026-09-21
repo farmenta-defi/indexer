@@ -136,14 +136,23 @@ export async function onBadDebtSocialized(db: Db, event: Log<{ amount: bigint }>
 }
 
 // `liquidate` emits, in this order and with nothing in between: `ReservesUpdated`,
-// `BadDebtSocialized` when lenders took a loss, `Liquidate`. On the full branch the burn,
-// and so the `Transfer` that closed the loan, came earlier in the same transaction.
+// `BadDebtSocialized` when lenders took a loss, `Liquidate`. `fullSeizure` says whether the
+// position was burned and the loan deleted on chain (FAR-51); it is the only thing that
+// closes a loan here, whether or not any bad debt was left.
 export async function onLiquidate(
   db: Db,
-  event: Log<{ tokenId: bigint; liquidator: Address; repaid: bigint; out0: bigint; out1: bigint; badDebt: bigint }>,
+  event: Log<{
+    tokenId: bigint;
+    liquidator: Address;
+    repaid: bigint;
+    out0: bigint;
+    out1: bigint;
+    badDebt: bigint;
+    fullSeizure: boolean;
+  }>,
 ) {
   const market = lower(event.log.address);
-  const { tokenId, repaid, out0, out1, badDebt } = event.args;
+  const { tokenId, repaid, out0, out1, badDebt, fullSeizure } = event.args;
   const held = await db.find(loan, { market, tokenId });
   if (!held) throw new Error(`Liquidate for position ${tokenId}, which ${market} never took into custody`);
 
@@ -161,6 +170,7 @@ export async function onLiquidate(
   await db.update(loan, { market, tokenId }).set({
     liquidatedUsdg: held.liquidatedUsdg + repaid,
     lastActivityAt: event.block.timestamp,
+    ...(fullSeizure ? { status: LOAN_STATUS.liquidated, closedAt: event.block.timestamp } : {}),
   });
   await db.insert(liquidation).values({
     ...marketLogKey(event),
@@ -168,7 +178,7 @@ export async function onLiquidate(
     owner: held.owner,
     poolId: held.poolId,
     liquidator: lower(event.args.liquidator),
-    full: held.status === LOAN_STATUS.liquidated,
+    full: fullSeizure,
     repaidUsdg: repaid,
     badDebtUsdg: badDebt,
     socializedUsdg: socialized,
