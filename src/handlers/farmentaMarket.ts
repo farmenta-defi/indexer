@@ -3,7 +3,7 @@ import type { Address, Hex } from "viem";
 import { badDebtSocialized, liquidation, loan, loanActivity, position } from "../../ponder.schema.ts";
 import { LOAN_STATUS } from "../lib/loan.ts";
 import { lower, marketLogKey, type Db, type Log } from "./event.ts";
-import { releaseBurn } from "./pendingBurn.ts";
+import { noStaleBurn, releaseBurn } from "./pendingBurn.ts";
 
 // Both markets emit these; `event.log.address` says which one (ponder.config.ts).
 
@@ -29,6 +29,7 @@ const activity = (
 // `safeTransferFrom` push alike, always after the NFT reached the market, so the position
 // row is there to take the pool from.
 export async function onCollateralDeposited(db: Db, event: Log<{ tokenId: bigint; owner: Address }>) {
+  await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId } = event.args;
   const owner = lower(event.args.owner);
@@ -53,6 +54,7 @@ export async function onCollateralDeposited(db: Db, event: Log<{ tokenId: bigint
 }
 
 export async function onCollateralWithdrawn(db: Db, event: Log<{ tokenId: bigint; owner: Address }>) {
+  await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId } = event.args;
   const held = await db.find(loan, { market, tokenId });
@@ -67,6 +69,7 @@ export async function onCollateralWithdrawn(db: Db, event: Log<{ tokenId: bigint
 }
 
 export async function onBorrow(db: Db, event: Log<{ tokenId: bigint; amount: bigint }>) {
+  await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId, amount } = event.args;
   const held = await db.find(loan, { market, tokenId });
@@ -83,6 +86,7 @@ export async function onBorrow(db: Db, event: Log<{ tokenId: bigint; amount: big
 // `amount` is what was actually taken, after the cap at the outstanding debt. `everBorrowed`
 // stays true even when that was all of it: only `debtOf` can tell.
 export async function onRepay(db: Db, event: Log<{ tokenId: bigint; amount: bigint }>) {
+  await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId, amount } = event.args;
   const held = await db.find(loan, { market, tokenId });
@@ -99,6 +103,7 @@ export async function onRepay(db: Db, event: Log<{ tokenId: bigint; amount: bigi
 // follow in FAR-42). It fills a pool that START_BLOCK_FLOOR left null, and must agree with
 // one taken from `position`: a mismatch means the salt-to-tokenId join is wrong.
 async function touch(db: Db, event: Log<{ tokenId: bigint; poolId: Hex }>) {
+  await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId, poolId } = event.args;
   const held = await db.find(loan, { market, tokenId });
@@ -133,6 +138,7 @@ export async function onCollectFees(
 }
 
 export async function onBadDebtSocialized(db: Db, event: Log<{ amount: bigint }>) {
+  await noStaleBurn(db, event);
   await db.insert(badDebtSocialized).values({ ...marketLogKey(event), amountUsdg: event.args.amount });
 }
 

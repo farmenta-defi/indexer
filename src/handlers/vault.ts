@@ -2,6 +2,7 @@ import { zeroAddress, type Address } from "viem";
 
 import { vaultActivity, vaultBalance } from "../../ponder.schema.ts";
 import { lower, marketLogKey, type Db, type Log } from "./event.ts";
+import { noStaleBurn } from "./pendingBurn.ts";
 
 // The ERC-4626 side of FarmentaMarket. Apart from the loan handlers (farmentaMarket.ts)
 // because the two share nothing but the emitting address.
@@ -10,6 +11,7 @@ export async function onDeposit(
   db: Db,
   event: Log<{ sender: Address; owner: Address; assets: bigint; shares: bigint }>,
 ) {
+  await noStaleBurn(db, event);
   const { sender, owner, assets, shares } = event.args;
   await db.insert(vaultActivity).values({
     ...marketLogKey(event),
@@ -26,6 +28,7 @@ export async function onWithdraw(
   db: Db,
   event: Log<{ sender: Address; receiver: Address; owner: Address; assets: bigint; shares: bigint }>,
 ) {
+  await noStaleBurn(db, event);
   const { sender, receiver, owner, assets, shares } = event.args;
   await db.insert(vaultActivity).values({
     ...marketLogKey(event),
@@ -51,6 +54,7 @@ async function moveShares(db: Db, event: Log<unknown>, account: Address, delta: 
 // Every share movement, so balances need nothing else: a deposit mints from the zero
 // address, a withdrawal burns to it. The zero address itself holds no balance.
 export async function onShareTransfer(db: Db, event: Log<{ from: Address; to: Address; value: bigint }>) {
+  await noStaleBurn(db, event);
   const { value } = event.args;
   const from = lower(event.args.from);
   const to = lower(event.args.to);

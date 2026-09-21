@@ -45,5 +45,17 @@ export async function releaseBurn(db: Db, event: Log<{ tokenId: bigint; fullSeiz
   if (burn) await db.delete(pendingBurn, { market });
 }
 
+/**
+ * Called first by every other handler of a market's events. A burn still waiting when the
+ * market emits in a later transaction was never confirmed, and never will be.
+ */
+export async function noStaleBurn(db: Db, event: Log<unknown>) {
+  const market = lower(event.log.address);
+  const burn = await db.find(pendingBurn, { market });
+  if (burn && burn.transactionHash !== event.transaction.hash) {
+    throw unconfirmed(market, burn.tokenId, burn.transactionHash);
+  }
+}
+
 const unconfirmed = (market: Address, tokenId: bigint, transactionHash: string) =>
   new Error(`${market} burned position ${tokenId} in ${transactionHash} without a full-seizure Liquidate`);

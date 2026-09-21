@@ -4,9 +4,10 @@ import { getAddress, numberToHex, zeroAddress, type Address, type Hex } from "vi
 
 import { UNISWAP } from "../config/uniswap.ts";
 import * as schema from "../ponder.schema.ts";
-import { onBadDebtSocialized, onBorrow, onCollateralDeposited, onLiquidate } from "../src/handlers/farmentaMarket.ts";
+import { onBadDebtSocialized, onBorrow, onCollateralDeposited, onLiquidate, onRepay } from "../src/handlers/farmentaMarket.ts";
 import { onModifyLiquidity } from "../src/handlers/poolManager.ts";
 import { onTransfer } from "../src/handlers/positionManager.ts";
+import { onShareTransfer } from "../src/handlers/vault.ts";
 import type { Log } from "../src/handlers/event.ts";
 import { blockOf, chain, logIndexOf, nextLog, timeOf, txOf } from "./support/events.ts";
 import { fakeDb } from "./support/fakeDb.ts";
@@ -194,10 +195,10 @@ describe("liquidation handlers", () => {
 
     it("a full-seizure `Liquidate` for another position than the one burned stops the indexer", async () => {
       const { db, at } = await borrowed();
-      const burn = at({ from: MARKET, to: zeroAddress, tokenId: 7n });
-      await onTransfer(db, burn);
       await onTransfer(db, at({ from: zeroAddress, to: MARKET, tokenId: 8n }));
       await onCollateralDeposited(db, at({ tokenId: 8n, owner: ALICE }, MARKET));
+      const burn = at({ from: MARKET, to: zeroAddress, tokenId: 7n });
+      await onTransfer(db, burn);
       await assert.rejects(
         onLiquidate(db, nextLog(burn, { ...liquidate, tokenId: 8n, fullSeizure: true }, MARKET)),
         /seized position 8 whole/,
@@ -227,6 +228,16 @@ describe("liquidation handlers", () => {
       ]);
     });
 
+    it("a burn left waiting stops the indexer at the market's next event from another transaction", async () => {
+      const { db, rows, at } = await borrowed();
+      await onTransfer(db, at({ from: MARKET, to: zeroAddress, tokenId: 7n }));
+      await assert.rejects(onRepay(db, at({ tokenId: 7n, amount: 1n }, MARKET)), /burned position 7 in 0x\w+ without/);
+      await assert.rejects(onShareTransfer(db, at({ from: ALICE, to: KEEPER, value: 1n }, MARKET)), /burned position 7/);
+      // Another market's events are not this burn's business.
+      await onShareTransfer(db, at({ from: zeroAddress, to: KEEPER, value: 1n }, OTHER_MARKET));
+      assert.equal(rows(schema.vaultBalance).length, 1);
+    });
+
     it("refuses a socialized loss larger than the bad debt", async () => {
       const { db, at } = await borrowed();
       const loss = at({ amount: 51n }, MARKET);
@@ -248,6 +259,20 @@ describe("liquidation handlers", () => {
       const { full, badDebtUsdg } = rows(schema.liquidation)[0] as Record<string, unknown>;
       assert.deepEqual({ full, badDebtUsdg }, { full: true, badDebtUsdg: 0n });
       assert.equal(rows(schema.loan)[0]?.status, "liquidated");
+    });
+
+    it("a redeem from inside the full-seizure payout, between the burn and `Liquidate`, is not a stale burn", async () => {
+      const { db, rows, at } = await borrowed();
+      await onShareTransfer(db, at({ from: zeroAddress, to: KEEPER, value: 5n }, MARKET));
+      const burn = at({ from: MARKET, to: zeroAddress, tokenId: 7n });
+      await onTransfer(db, burn);
+      // The liquidator's `to` redeems when the ETH lands (spec §8, execution order).
+      const redeem = nextLog(burn, { from: KEEPER, to: zeroAddress, value: 5n }, MARKET);
+      await onShareTransfer(db, redeem);
+      await onLiquidate(db, nextLog(redeem, { tokenId: 7n, liquidator: KEEPER, repaid: 1n, out0: 0n, out1: 0n, badDebt: 0n, fullSeizure: true }));
+
+      assert.equal(rows(schema.loan)[0]?.status, "liquidated");
+      assert.deepEqual(rows(schema.pendingBurn), []);
     });
 
     it("a burn of a position no market holds waits for nothing", async () => {
