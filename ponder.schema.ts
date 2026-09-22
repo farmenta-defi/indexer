@@ -257,10 +257,10 @@ export const loanActivity = onchainTable(
     // `LiquidityChanged.liqDelta`, signed. Only for the two liquidity kinds. The position's
     // liquidity itself comes from `ModifyLiquidity`, never from this.
     liquidityDelta: t.bigint(),
-    // Only for "collect_fees". NOT verified fee income: per the contract's NatSpec they are
-    // `to`'s balance change across the claim, which counts anything else that reached `to`
-    // meanwhile. Fees claimed inside `increaseLiquidity` and `decreaseLiquidity` emit no
-    // `CollectFees` at all (spec §4.1, v0.48), so they are in no row here.
+    // Only for "collect_fees": the fees the position realised, raw token units, read by the
+    // contract from its fee growth just before the payout (spec §4.1, FAR-52). One row per
+    // payout: `collectFees`, and the fees that leave inside `increaseLiquidity` and
+    // `decreaseLiquidity`. Not the fees a liquidation realises (§8).
     amount0: t.bigint(),
     amount1: t.bigint(),
   }),
