@@ -163,6 +163,30 @@ describe("loan handlers", () => {
       assert.equal(rows(schema.position)[0]?.liquidity, 850n);
     });
 
+    it("fees paid out by an addition or a removal are `collect_fees` rows too (FAR-52)", async () => {
+      const { db, rows, at } = await deposited();
+      // `increaseLiquidity`: `CollectFees` first, then the claim and the addition, then `LiquidityChanged`.
+      await onCollectFees(db, at({ tokenId: 7n, poolId: POOL, amount0: 3n, amount1: 4_000n }, BLUE_CHIP)); // 5
+      await onModifyLiquidity(db, at(modify(7n, 0n))); // 6
+      await onModifyLiquidity(db, at(modify(7n, 250n))); // 7
+      await onLiquidityChanged(db, at({ tokenId: 7n, poolId: POOL, liqDelta: 250n }, BLUE_CHIP)); // 8
+      // `decreaseLiquidity`: the removal pays principal and fees together, then `CollectFees` and
+      // `LiquidityChanged`.
+      await onModifyLiquidity(db, at(modify(7n, -400n))); // 9
+      await onCollectFees(db, at({ tokenId: 7n, poolId: POOL, amount0: 5n, amount1: 6_000n }, BLUE_CHIP)); // 10
+      await onLiquidityChanged(db, at({ tokenId: 7n, poolId: POOL, liqDelta: -400n }, BLUE_CHIP)); // 11
+
+      assert.deepEqual(rows(schema.loanActivity), [
+        activityRow(4, "deposit"),
+        activityRow(5, "collect_fees", { amount0: 3n, amount1: 4_000n }),
+        activityRow(8, "increase_liquidity", { liquidityDelta: 250n }),
+        activityRow(10, "collect_fees", { amount0: 5n, amount1: 6_000n }),
+        activityRow(11, "decrease_liquidity", { liquidityDelta: -400n }),
+      ]);
+      assert.deepEqual(rows(schema.loan), [{ ...IN_CUSTODY, lastActivityAt: timeOf(11) }]);
+      assert.equal(rows(schema.position)[0]?.liquidity, 850n);
+    });
+
     it("a full liquidation burns the position, and its `Liquidate` closes the loan", async () => {
       const { db, rows, at } = await deposited();
       await onBorrow(db, at({ tokenId: 7n, amount: 300_000_000n }, BLUE_CHIP));
