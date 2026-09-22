@@ -250,6 +250,9 @@ describe("loan handlers", () => {
       const { db, at } = await deposited();
       const event = at({ tokenId: 7n, poolId: OTHER_POOL, liqDelta: 1n }, BLUE_CHIP);
       await assert.rejects(onLiquidityChanged(db, event), /event names pool/);
+      // `CollectFees` too, now that three paths emit it (FAR-52).
+      const fees = at({ tokenId: 7n, poolId: OTHER_POOL, amount0: 1n, amount1: 1n }, BLUE_CHIP);
+      await assert.rejects(onCollectFees(db, fees), /event names pool/);
     });
 
     it("an event from the other market does not reach this market's loan", async () => {
