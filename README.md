@@ -167,11 +167,13 @@ position's liquidity always comes from the PoolManager's `ModifyLiquidity`, whic
 partial liquidations and the burn that emit no `LiquidityChanged`. Both events already carry
 `poolId`; it must agree with the one taken from `position`, or the indexer stops.
 
-**`collect_fees` rows are not fee income.** `amount0`/`amount1` are `to`'s balance change across
-the claim (contract NatSpec), and the fees claimed inside `increaseLiquidity` and
-`decreaseLiquidity` emit no `CollectFees` at all (spec §4.1, v0.48): from events they are only
-visible as a `ModifyLiquidity`, which does not say how much was paid out. Fee income per
-position cannot be rebuilt here until the contracts emit it.
+**`collect_fees` rows are the fees each position was paid** (FAR-52). `CollectFees` comes from
+`collectFees` and from the fee claims inside `increaseLiquidity` and `decreaseLiquidity`, and
+`amount0`/`amount1` are the fees the position realised, which the contract reads from its fee
+growth just before the payout, not a balance change of the recipient. Summing a position's rows
+gives the fees it has paid out while in custody, in raw token units; USD values are the
+backend's. Not included: fees realised by a liquidation, partial or full (spec §8), and fees a
+position paid out before it was deposited.
 
 ### Liquidations
 

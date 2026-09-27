@@ -126,8 +126,8 @@ export async function onLiquidityChanged(db: Db, event: Log<{ tokenId: bigint; p
   await db.insert(loanActivity).values(activity(event, held.owner, kind, { liquidityDelta: liqDelta }));
 }
 
-// Only `collectFees` emits this; the fee claims inside the two liquidity functions do not
-// (spec §4.1, v0.48). The amounts are `to`'s balance change, not verified fee income.
+// Emitted by `collectFees` and by the fee claims inside `increaseLiquidity` and
+// `decreaseLiquidity` (spec §4.1, FAR-52). The amounts are the fees the position realised.
 export async function onCollectFees(
   db: Db,
   event: Log<{ tokenId: bigint; poolId: Hex; amount0: bigint; amount1: bigint }>,
