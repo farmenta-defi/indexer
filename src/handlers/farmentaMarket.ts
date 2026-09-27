@@ -27,7 +27,7 @@ const activity = (
 
 // Every event of a loan names its pool, and must name the one `CollateralDeposited` did:
 // the contract emits `Loan.poolKeyId` each time (spec §4.1, FAR-42).
-function samePool(held: { poolId: Hex | null }, event: Log<{ tokenId: bigint; poolId: Hex }>) {
+function samePool(held: { poolId: Hex }, event: Log<{ tokenId: bigint; poolId: Hex }>) {
   const { tokenId, poolId } = event.args;
   if (held.poolId !== poolId) {
     throw new Error(`position ${tokenId} on ${lower(event.log.address)}: event names pool ${poolId}, the loan ${held.poolId}`);
