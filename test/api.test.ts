@@ -24,6 +24,8 @@ const BOB: Address = "0x0000000000000000000000000000000000000b0b";
 const BLUE_POOL: Hex = "0x387bf619da4d3fb62bb276482693dba1b9b3520f573cabdfe033384a24125982";
 const MEME_POOL: Hex = "0xc6451046bf06c20295032cf6e05e85bb1ca35fd7aebaf30c59c33350fe3c776e";
 const UNLISTED_POOL: Hex = "0x54f7883914619af9105355bf83ed678bcf9f63560218ac61c9963b9503d0ba32";
+// Every loan below is on the one pool its market lists.
+const POOL_OF: Record<Address, Hex> = { [BLUE_CHIP]: BLUE_POOL, [MEME]: MEME_POOL };
 
 const TERMS = {
   maxLtvBps: 6500,
@@ -51,7 +53,7 @@ before(async () => {
   };
   const deposit = async (tokenId: bigint, owner: Address, market: Address) => {
     await onTransfer(db, at({ from: owner, to: market, tokenId }));
-    await onCollateralDeposited(db, at({ tokenId, owner }, market));
+    await onCollateralDeposited(db, at({ tokenId, owner, poolId: POOL_OF[market]! }, market));
   };
 
   await onPoolListed(db, at({ poolId: BLUE_POOL, tier: 1, params: TERMS })); // 1
@@ -67,18 +69,18 @@ before(async () => {
   // 14: borrowed and repaid in full, still in custody. (10 to 32)
   for (const tokenId of [11n, 12n, 13n, 14n]) await mint(tokenId, ALICE, MEME_POOL);
   for (const tokenId of [11n, 12n, 13n, 14n]) await deposit(tokenId, ALICE, MEME);
-  await onBorrow(db, at({ tokenId: 11n, amount: 5_000_000n }, MEME));
-  await onBorrow(db, at({ tokenId: 13n, amount: 5_000_000n }, MEME));
-  await onRepay(db, at({ tokenId: 13n, amount: 5_000_001n }, MEME));
-  await onCollateralWithdrawn(db, at({ tokenId: 13n, owner: ALICE }, MEME));
+  await onBorrow(db, at({ tokenId: 11n, poolId: MEME_POOL, amount: 5_000_000n }, MEME));
+  await onBorrow(db, at({ tokenId: 13n, poolId: MEME_POOL, amount: 5_000_000n }, MEME));
+  await onRepay(db, at({ tokenId: 13n, poolId: MEME_POOL, amount: 5_000_001n }, MEME));
+  await onCollateralWithdrawn(db, at({ tokenId: 13n, owner: ALICE, poolId: MEME_POOL }, MEME));
   await onTransfer(db, at({ from: MEME, to: ALICE, tokenId: 13n }));
-  await onBorrow(db, at({ tokenId: 14n, amount: 7_000_000n }, MEME));
-  await onRepay(db, at({ tokenId: 14n, amount: 7_000_002n }, MEME));
+  await onBorrow(db, at({ tokenId: 14n, poolId: MEME_POOL, amount: 7_000_000n }, MEME));
+  await onRepay(db, at({ tokenId: 14n, poolId: MEME_POOL, amount: 7_000_002n }, MEME));
 
   // A blue-chip loan that borrowed: Bob's 21. (33 to 37)
   await mint(21n, BOB, BLUE_POOL);
   await deposit(21n, BOB, BLUE_CHIP);
-  await onBorrow(db, at({ tokenId: 21n, amount: 9_000_000n }, BLUE_CHIP));
+  await onBorrow(db, at({ tokenId: 21n, poolId: BLUE_POOL, amount: 9_000_000n }, BLUE_CHIP));
 
   // Alice lends on both markets, and hands some meme shares to Bob. (38 to 40)
   await onShareTransfer(db, at({ from: zeroAddress, to: ALICE, value: 990n }, BLUE_CHIP));
@@ -93,9 +95,9 @@ before(async () => {
   // to Bob, who deposits it in the same market. (45 to 54)
   await mint(15n, ALICE, MEME_POOL);
   await deposit(15n, ALICE, MEME);
-  await onBorrow(db, at({ tokenId: 15n, amount: 3_000_000n }, MEME));
-  await onRepay(db, at({ tokenId: 15n, amount: 3_000_001n }, MEME));
-  await onCollateralWithdrawn(db, at({ tokenId: 15n, owner: ALICE }, MEME));
+  await onBorrow(db, at({ tokenId: 15n, poolId: MEME_POOL, amount: 3_000_000n }, MEME));
+  await onRepay(db, at({ tokenId: 15n, poolId: MEME_POOL, amount: 3_000_001n }, MEME));
+  await onCollateralWithdrawn(db, at({ tokenId: 15n, owner: ALICE, poolId: MEME_POOL }, MEME));
   await onTransfer(db, at({ from: MEME, to: BOB, tokenId: 15n }));
   await deposit(15n, BOB, MEME);
 

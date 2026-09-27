@@ -33,8 +33,8 @@ async function borrowed() {
   const at = chain();
   await onTransfer(store.db, at({ from: zeroAddress, to: MARKET, tokenId: 7n }));
   await onModifyLiquidity(store.db, at(modify(1_000n)));
-  await onCollateralDeposited(store.db, at({ tokenId: 7n, owner: ALICE }, MARKET));
-  await onBorrow(store.db, at({ tokenId: 7n, amount: 300_000_000n }, MARKET));
+  await onCollateralDeposited(store.db, at({ tokenId: 7n, owner: ALICE, poolId: POOL }, MARKET));
+  await onBorrow(store.db, at({ tokenId: 7n, poolId: POOL, amount: 300_000_000n }, MARKET));
   return { ...store, at };
 }
 
@@ -76,7 +76,7 @@ describe("liquidation handlers", () => {
       await onModifyLiquidity(db, pull);
       await onLiquidate(
         db,
-        nextLog(pull, { tokenId: 7n, liquidator: KEEPER, repaid: 120_000_000n, out0: 5n, out1: 126_000_000n, badDebt: 0n, fullSeizure: false }, MARKET),
+        nextLog(pull, { tokenId: 7n, liquidator: KEEPER, poolId: POOL, repaid: 120_000_000n, out0: 5n, out1: 126_000_000n, badDebt: 0n, fullSeizure: false }, MARKET),
       );
 
       assert.deepEqual(rows(schema.liquidation), [
@@ -107,7 +107,7 @@ describe("liquidation handlers", () => {
       await onBadDebtSocialized(db, loss);
       await onLiquidate(
         db,
-        nextLog(loss, { tokenId: 7n, liquidator: getAddress(KEEPER), repaid: 250_000_000n, out0: 9n, out1: 262_500_000n, badDebt: 50_000_000n, fullSeizure: true }),
+        nextLog(loss, { tokenId: 7n, liquidator: getAddress(KEEPER), poolId: POOL, repaid: 250_000_000n, out0: 9n, out1: 262_500_000n, badDebt: 50_000_000n, fullSeizure: true }),
       );
 
       assert.deepEqual(rows(schema.liquidation), [
@@ -142,7 +142,7 @@ describe("liquidation handlers", () => {
 
     it("two partial liquidations add up on the loan, one row each", async () => {
       const { db, rows, at } = await borrowed();
-      const liquidate = (repaid: bigint) => ({ tokenId: 7n, liquidator: KEEPER, repaid, out0: 0n, out1: 0n, badDebt: 0n, fullSeizure: false });
+      const liquidate = (repaid: bigint) => ({ tokenId: 7n, liquidator: KEEPER, poolId: POOL, repaid, out0: 0n, out1: 0n, badDebt: 0n, fullSeizure: false });
       await onLiquidate(db, at(liquidate(100_000_000n), MARKET));
       await onLiquidate(db, at(liquidate(50_000_000n), MARKET));
 
@@ -158,7 +158,7 @@ describe("liquidation handlers", () => {
   });
 
   describe("negative", () => {
-    const liquidate = { tokenId: 7n, liquidator: KEEPER, repaid: 1n, out0: 0n, out1: 0n, badDebt: 50n, fullSeizure: false };
+    const liquidate = { tokenId: 7n, liquidator: KEEPER, poolId: POOL, repaid: 1n, out0: 0n, out1: 0n, badDebt: 50n, fullSeizure: false };
 
     it("refuses a `Liquidate` for a position the market never took into custody", async () => {
       const { db, at } = await borrowed();
@@ -196,7 +196,7 @@ describe("liquidation handlers", () => {
     it("a full-seizure `Liquidate` for another position than the one burned stops the indexer", async () => {
       const { db, at } = await borrowed();
       await onTransfer(db, at({ from: zeroAddress, to: MARKET, tokenId: 8n }));
-      await onCollateralDeposited(db, at({ tokenId: 8n, owner: ALICE }, MARKET));
+      await onCollateralDeposited(db, at({ tokenId: 8n, owner: ALICE, poolId: POOL }, MARKET));
       const burn = at({ from: MARKET, to: zeroAddress, tokenId: 7n });
       await onTransfer(db, burn);
       await assert.rejects(
@@ -215,7 +215,7 @@ describe("liquidation handlers", () => {
     it("a second burn while the first still waits for its `Liquidate` stops the indexer", async () => {
       const { db, rows, at } = await borrowed();
       await onTransfer(db, at({ from: zeroAddress, to: MARKET, tokenId: 8n }));
-      await onCollateralDeposited(db, at({ tokenId: 8n, owner: ALICE }, MARKET));
+      await onCollateralDeposited(db, at({ tokenId: 8n, owner: ALICE, poolId: POOL }, MARKET));
       await onTransfer(db, at({ from: MARKET, to: zeroAddress, tokenId: 7n }));
       await assert.rejects(
         onTransfer(db, at({ from: MARKET, to: zeroAddress, tokenId: 8n })),
@@ -231,7 +231,7 @@ describe("liquidation handlers", () => {
     it("a burn left waiting stops the indexer at the market's next event from another transaction", async () => {
       const { db, rows, at } = await borrowed();
       await onTransfer(db, at({ from: MARKET, to: zeroAddress, tokenId: 7n }));
-      await assert.rejects(onRepay(db, at({ tokenId: 7n, amount: 1n }, MARKET)), /burned position 7 in 0x\w+ without/);
+      await assert.rejects(onRepay(db, at({ tokenId: 7n, poolId: POOL, amount: 1n }, MARKET)), /burned position 7 in 0x\w+ without/);
       await assert.rejects(onShareTransfer(db, at({ from: ALICE, to: KEEPER, value: 1n }, MARKET)), /burned position 7/);
       // Another market's events are not this burn's business.
       await onShareTransfer(db, at({ from: zeroAddress, to: KEEPER, value: 1n }, OTHER_MARKET));
@@ -253,7 +253,7 @@ describe("liquidation handlers", () => {
       await onTransfer(db, burn);
       await onLiquidate(
         db,
-        nextLog(burn, { tokenId: 7n, liquidator: KEEPER, repaid: 300_000_010n, out0: 0n, out1: 0n, badDebt: 0n, fullSeizure: true }, MARKET),
+        nextLog(burn, { tokenId: 7n, liquidator: KEEPER, poolId: POOL, repaid: 300_000_010n, out0: 0n, out1: 0n, badDebt: 0n, fullSeizure: true }, MARKET),
       );
 
       const { full, badDebtUsdg } = rows(schema.liquidation)[0] as Record<string, unknown>;
@@ -269,7 +269,7 @@ describe("liquidation handlers", () => {
       // The liquidator's `to` redeems when the ETH lands (spec §8, execution order).
       const redeem = nextLog(burn, { from: KEEPER, to: zeroAddress, value: 5n }, MARKET);
       await onShareTransfer(db, redeem);
-      await onLiquidate(db, nextLog(redeem, { tokenId: 7n, liquidator: KEEPER, repaid: 1n, out0: 0n, out1: 0n, badDebt: 0n, fullSeizure: true }));
+      await onLiquidate(db, nextLog(redeem, { tokenId: 7n, liquidator: KEEPER, poolId: POOL, repaid: 1n, out0: 0n, out1: 0n, badDebt: 0n, fullSeizure: true }));
 
       assert.equal(rows(schema.loan)[0]?.status, "liquidated");
       assert.deepEqual(rows(schema.pendingBurn), []);
@@ -288,7 +288,7 @@ describe("liquidation handlers", () => {
       await onTransfer(db, burn);
       await onLiquidate(
         db,
-        nextLog(burn, { tokenId: 7n, liquidator: KEEPER, repaid: 250_000_000n, out0: 0n, out1: 0n, badDebt: 50_000_000n, fullSeizure: true }, MARKET),
+        nextLog(burn, { tokenId: 7n, liquidator: KEEPER, poolId: POOL, repaid: 250_000_000n, out0: 0n, out1: 0n, badDebt: 50_000_000n, fullSeizure: true }, MARKET),
       );
 
       const { full, badDebtUsdg, socializedUsdg } = rows(schema.liquidation)[0] as Record<string, unknown>;

@@ -83,9 +83,9 @@ async function replay() {
 
   // Position 7 becomes collateral, is borrowed against and partly repaid.
   await onTransfer(db, at({ from: BOB, to: MARKET, tokenId: 7n })); // 19
-  await onCollateralDeposited(db, at({ tokenId: 7n, owner: BOB }, MARKET)); // 20
-  await onBorrow(db, at({ tokenId: 7n, amount: 300_000_000n }, MARKET)); // 21
-  await onRepay(db, at({ tokenId: 7n, amount: 100_000_000n }, MARKET)); // 22
+  await onCollateralDeposited(db, at({ tokenId: 7n, owner: BOB, poolId: LISTED_ID }, MARKET)); // 20
+  await onBorrow(db, at({ tokenId: 7n, poolId: LISTED_ID, amount: 300_000_000n }, MARKET)); // 21
+  await onRepay(db, at({ tokenId: 7n, poolId: LISTED_ID, amount: 100_000_000n }, MARKET)); // 22
 
   // One transaction, a full liquidation: the burn, its removal, the loss, `Liquidate`.
   const burn = at({ from: MARKET, to: zeroAddress, tokenId: 7n }); // 23
@@ -94,7 +94,7 @@ async function replay() {
   await onModifyLiquidity(db, removal);
   const loss = nextLog(removal, { amount: 4_000_000n }, MARKET);
   await onBadDebtSocialized(db, loss);
-  const liquidate = { tokenId: 7n, liquidator: KEEPER, repaid: 190_000_000n, out0: 9n, out1: 199_500_000n, badDebt: 10_000_000n, fullSeizure: true };
+  const liquidate = { tokenId: 7n, liquidator: KEEPER, poolId: LISTED_ID, repaid: 190_000_000n, out0: 9n, out1: 199_500_000n, badDebt: 10_000_000n, fullSeizure: true };
   await onLiquidate(db, nextLog(loss, liquidate));
 
   // The vault side: Alice deposits, hands some shares to Bob, and withdraws some.
@@ -109,7 +109,7 @@ async function replay() {
   // Position 9 is minted into custody (`mintAndDeposit`), grown, and its fees are claimed.
   await onTransfer(db, at({ from: zeroAddress, to: MARKET, tokenId: 9n })); // 27
   await onModifyLiquidity(db, at(liquidity(9n, 700n))); // 28
-  await onCollateralDeposited(db, at({ tokenId: 9n, owner: ALICE }, MARKET)); // 29
+  await onCollateralDeposited(db, at({ tokenId: 9n, owner: ALICE, poolId: LISTED_ID }, MARKET)); // 29
   await onModifyLiquidity(db, at(liquidity(9n, 50n))); // 30
   await onLiquidityChanged(db, at({ tokenId: 9n, poolId: LISTED_ID, liqDelta: 50n }, MARKET)); // 31
   await onCollectFees(db, at({ tokenId: 9n, poolId: LISTED_ID, amount0: 11n, amount1: 22_000n }, MARKET)); // 32
