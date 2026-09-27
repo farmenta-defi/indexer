@@ -232,6 +232,29 @@ describe("api", () => {
         { positions: [], loans: [], vaultShares: [] },
       );
     });
+
+    it("a loan on a position whose mint was never seen (START_BLOCK_FLOOR) is a keeper candidate all the same", async () => {
+      const { db, rows } = fakeDb();
+      const at = chain();
+      await onPoolListed(db, at({ poolId: MEME_POOL, tier: 2, params: TERMS }));
+      await onTransfer(db, at({ from: ALICE, to: MEME, tokenId: 16n }));
+      await onCollateralDeposited(db, at({ tokenId: 16n, owner: ALICE, poolId: MEME_POOL }, MEME));
+      await onBorrow(db, at({ tokenId: 16n, poolId: MEME_POOL, amount: 2_000_000n }, MEME));
+
+      const response = await createApp(await pgDb(rows), schema).request("/loans/keeper-candidates");
+      const candidates = ((await response.json()) as any[]).map(({ tokenId, poolId, tier, liquidity, tickLower, tickUpper }) => ({
+        tokenId,
+        poolId,
+        tier,
+        liquidity,
+        tickLower,
+        tickUpper,
+      }));
+      // The pool and its tier come from the events; only `position` would know the rest.
+      assert.deepEqual(candidates, [
+        { tokenId: "16", poolId: MEME_POOL, tier: 2, liquidity: null, tickLower: null, tickUpper: null },
+      ]);
+    });
   });
 });
 
