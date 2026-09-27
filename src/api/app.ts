@@ -60,8 +60,9 @@ export function createApp(db: ReadonlyDrizzle<Schema>, schema: Schema) {
   });
 
   // A loan with what its consumers would otherwise join by hand: the position's range and
-  // liquidity, and the tier of its pool. Both are null when START_BLOCK_FLOOR skipped the
-  // mint; `tier` is also null for a pool that is not listed, which a market never accepts.
+  // liquidity, and the tier of its pool. Range and liquidity are null when START_BLOCK_FLOOR
+  // skipped the mint; `tier` is null for a pool that is not listed, which a market never
+  // accepts.
   const loans = () =>
     db
       .select({

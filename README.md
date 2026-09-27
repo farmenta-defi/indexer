@@ -69,9 +69,9 @@ Keep the floor at or below the block the first Farmenta contract was deployed in
 a `CollateralWithdrawn`, `Borrow`, `Repay` or `Liquidate` for a loan whose `CollateralDeposited`
 was skipped, or vault shares leaving a holder whose deposit was skipped, stops the indexer, because a row that cannot be right is worse than no row. Positions are the
 exception, as their mints go back to block 9,073: one minted before the floor is left out
-silently, and a loan on it has a null `poolId` until a `LiquidityChanged` or `CollectFees`
-names it. `/loans/keeper-candidates` joins the pool to read its tier, so such a loan is missing
-from the keeper's list without any error: one more reason never to set the floor in production.
+silently. A loan on it still has its `poolId`, which comes from the market's events, and is on
+the keeper's list; its range and liquidity are null in `/loans`, and no `position` row confirms
+its pool: one more reason never to set the floor in production.
 
 **Farmenta addresses.** None is written in code: mainnet is not deployed yet (FAR-23), and
 a fork or redeploy moves all of them. Copy `deployments/example.json` to
@@ -159,13 +159,17 @@ loan is repaid in full. The backend (FAR-38) and the keeper (FAR-19) **must** co
 candidate with `debtOf(tokenId)`. `borrowedUsdg`, `repaidUsdg` and `liquidatedUsdg` are running
 totals of event amounts for the current custody; their difference is not the debt.
 
-`loan.poolId` is copied from `position` when the position is deposited, because
-`CollateralDeposited` does not carry it yet (FAR-42).
+**A loan's pool always comes from the market's events; `position` only confirms it.** Every
+event of a loan names its pool (`CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`,
+`LiquidityChanged`, `CollectFees`, `Liquidate`; spec §4.1). `loan.poolId` is the one
+`CollateralDeposited` named, and `liquidation.poolId` the one `Liquidate` named; neither is ever
+null. The indexer **stops** when a deposit names another pool than the `position` row, which
+would mean the salt-to-tokenId join is wrong, and when any later event names another pool than
+the loan's.
 
 `LiquidityChanged` and `CollectFees` are history rows in `loan_activity` and nothing more. A
 position's liquidity always comes from the PoolManager's `ModifyLiquidity`, which also sees the
-partial liquidations and the burn that emit no `LiquidityChanged`. Both events already carry
-`poolId`; it must agree with the one taken from `position`, or the indexer stops.
+partial liquidations and the burn that emit no `LiquidityChanged`.
 
 **`collect_fees` rows are the fees each position was paid** (FAR-52). `CollectFees` comes from
 `collectFees` and from the fee claims inside `increaseLiquidity` and `decreaseLiquidity`, and
