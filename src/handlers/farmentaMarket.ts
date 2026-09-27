@@ -26,18 +26,22 @@ const activity = (
 });
 
 // Emitted by `depositCollateral`, `depositCollateralWithPermit`, `mintAndDeposit` and the
-// `safeTransferFrom` push alike, always after the NFT reached the market, so the position
-// row is there to take the pool from.
-export async function onCollateralDeposited(db: Db, event: Log<{ tokenId: bigint; owner: Address }>) {
+// `safeTransferFrom` push alike, always after the NFT reached the market. The loan's pool
+// is the one the event names (spec §4.1, FAR-42). `position` only confirms it, where the
+// mint was seen: a mismatch means the salt-to-tokenId join is wrong.
+export async function onCollateralDeposited(db: Db, event: Log<{ tokenId: bigint; owner: Address; poolId: Hex }>) {
   await noStaleBurn(db, event);
   const market = lower(event.log.address);
-  const { tokenId } = event.args;
+  const { tokenId, poolId } = event.args;
   const owner = lower(event.args.owner);
-  const held = await db.find(position, { tokenId });
+  const minted = await db.find(position, { tokenId });
+  if (minted && minted.poolId !== null && minted.poolId !== poolId) {
+    throw new Error(`position ${tokenId} on ${market}: event names pool ${poolId}, the position row ${minted.poolId}`);
+  }
 
   const row = {
     owner,
-    poolId: held?.poolId ?? null,
+    poolId,
     status: LOAN_STATUS.inCustody,
     everBorrowed: false,
     borrowedUsdg: 0n,

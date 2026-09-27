@@ -246,6 +246,14 @@ describe("loan handlers", () => {
       );
     });
 
+    it("refuses a `CollateralDeposited` that names another pool than the position's", async () => {
+      const { db, rows, at } = await minted();
+      await onTransfer(db, at({ from: ALICE, to: BLUE_CHIP, tokenId: 7n }));
+      const event = at({ tokenId: 7n, owner: ALICE, poolId: OTHER_POOL }, BLUE_CHIP);
+      await assert.rejects(onCollateralDeposited(db, event), /event names pool 0x54f7\w+, the position row 0x387b/);
+      assert.deepEqual(rows(schema.loan), []);
+    });
+
     it("refuses a market event that names another pool than the position's", async () => {
       const { db, at } = await deposited();
       const event = at({ tokenId: 7n, poolId: OTHER_POOL, liqDelta: 1n }, BLUE_CHIP);
@@ -317,19 +325,17 @@ describe("loan handlers", () => {
       );
     });
 
-    it("a loan on a position whose mint was never seen (START_BLOCK_FLOOR) has a null pool, until an event names it", async () => {
+    it("a loan on a position whose mint was never seen (START_BLOCK_FLOOR) takes its pool from the event", async () => {
       const { db, rows } = fakeDb();
       const at = chain();
       await onTransfer(db, at({ from: ALICE, to: BLUE_CHIP, tokenId: 7n }));
       await onCollateralDeposited(db, at({ tokenId: 7n, owner: ALICE, poolId: POOL }, BLUE_CHIP));
 
+      // There is no position row to take a pool from, or to confirm one.
+      assert.deepEqual(rows(schema.position), []);
       assert.deepEqual(rows(schema.loan), [
-        { ...IN_CUSTODY, poolId: null, depositedBlock: blockOf(2), depositedAt: timeOf(2), lastActivityAt: timeOf(2) },
+        { ...IN_CUSTODY, depositedBlock: blockOf(2), depositedAt: timeOf(2), lastActivityAt: timeOf(2) },
       ]);
-
-      // `LiquidityChanged` and `CollectFees` carry the pool themselves, and fill it in.
-      await onCollectFees(db, at({ tokenId: 7n, poolId: POOL, amount0: 0n, amount1: 0n }, BLUE_CHIP));
-      assert.equal(rows(schema.loan)[0]?.poolId, POOL);
     });
   });
 });
