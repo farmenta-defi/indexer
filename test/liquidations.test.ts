@@ -17,6 +17,7 @@ const OTHER_MARKET: Address = "0x00000000000000000000000000000000000b10e0";
 const ALICE: Address = "0x00000000000000000000000000000000000a11ce";
 const KEEPER: Address = "0x00000000000000000000000000000000000cee9e";
 const POOL: Hex = "0x387bf619da4d3fb62bb276482693dba1b9b3520f573cabdfe033384a24125982";
+const OTHER_POOL: Hex = "0x54f7883914619af9105355bf83ed678bcf9f63560218ac61c9963b9503d0ba32";
 
 const modify = (liquidityDelta: bigint) => ({
   id: POOL,
@@ -163,6 +164,22 @@ describe("liquidation handlers", () => {
     it("refuses a `Liquidate` for a position the market never took into custody", async () => {
       const { db, at } = await borrowed();
       await assert.rejects(onLiquidate(db, at(liquidate, OTHER_MARKET)), /never took into custody/);
+    });
+
+    it("refuses a `Liquidate` that names another pool than the position's, partial or full", async () => {
+      const { db, rows, at } = await borrowed();
+      await assert.rejects(
+        onLiquidate(db, at({ ...liquidate, poolId: OTHER_POOL }, MARKET)),
+        /event names pool 0x54f7\w+, the loan 0x387b/,
+      );
+      const burn = at({ from: MARKET, to: zeroAddress, tokenId: 7n });
+      await onTransfer(db, burn);
+      await assert.rejects(
+        onLiquidate(db, nextLog(burn, { ...liquidate, poolId: OTHER_POOL, fullSeizure: true }, MARKET)),
+        /event names pool 0x54f7\w+, the loan 0x387b/,
+      );
+      assert.deepEqual(rows(schema.liquidation), []);
+      assert.deepEqual(rows(schema.loan), [LOAN]);
     });
 
     it("a `BadDebtSocialized` that is not the log right before, in the same transaction, is not this liquidation's", async () => {

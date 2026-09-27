@@ -163,6 +163,7 @@ export async function onLiquidate(
   event: Log<{
     tokenId: bigint;
     liquidator: Address;
+    poolId: Hex;
     repaid: bigint;
     out0: bigint;
     out1: bigint;
@@ -171,9 +172,10 @@ export async function onLiquidate(
   }>,
 ) {
   const market = lower(event.log.address);
-  const { tokenId, repaid, out0, out1, badDebt, fullSeizure } = event.args;
+  const { tokenId, poolId, repaid, out0, out1, badDebt, fullSeizure } = event.args;
   const held = await db.find(loan, { market, tokenId });
   if (!held) throw new Error(`Liquidate for position ${tokenId}, which ${market} never took into custody`);
+  samePool(held, event);
 
   // `BadDebtSocialized` names no position. It is this liquidation's when it is the log right
   // before this one, in the same transaction.
@@ -196,7 +198,7 @@ export async function onLiquidate(
     ...marketLogKey(event),
     tokenId,
     owner: held.owner,
-    poolId: held.poolId,
+    poolId,
     liquidator: lower(event.args.liquidator),
     full: fullSeizure,
     repaidUsdg: repaid,
