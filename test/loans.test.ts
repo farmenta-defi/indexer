@@ -263,6 +263,30 @@ describe("loan handlers", () => {
       await assert.rejects(onCollectFees(db, fees), /event names pool/);
     });
 
+    it("refuses a `Borrow` or a `Repay` that names another pool than the position's", async () => {
+      const { db, rows, at } = await deposited();
+      const borrow = at({ tokenId: 7n, poolId: OTHER_POOL, amount: 1n }, BLUE_CHIP);
+      await assert.rejects(onBorrow(db, borrow), /event names pool 0x54f7\w+, the loan 0x387b/);
+      const repay = at({ tokenId: 7n, poolId: OTHER_POOL, amount: 1n }, BLUE_CHIP);
+      await assert.rejects(onRepay(db, repay), /event names pool 0x54f7\w+, the loan 0x387b/);
+      assert.deepEqual(rows(schema.loan), [IN_CUSTODY]);
+    });
+
+    it("refuses a `CollateralWithdrawn` that names another pool than the position's", async () => {
+      const { db, rows, at } = await deposited();
+      const event = at({ tokenId: 7n, owner: ALICE, poolId: OTHER_POOL }, BLUE_CHIP);
+      await assert.rejects(onCollateralWithdrawn(db, event), /event names pool 0x54f7\w+, the loan 0x387b/);
+      assert.deepEqual(rows(schema.loan), [IN_CUSTODY]);
+    });
+
+    it("a position whose mint was never seen is held to the pool its deposit named", async () => {
+      const { db } = fakeDb();
+      const at = chain();
+      await onCollateralDeposited(db, at({ tokenId: 7n, owner: ALICE, poolId: POOL }, BLUE_CHIP));
+      const event = at({ tokenId: 7n, poolId: OTHER_POOL, amount: 1n }, BLUE_CHIP);
+      await assert.rejects(onBorrow(db, event), /event names pool 0x54f7\w+, the loan 0x387b/);
+    });
+
     it("an event from the other market does not reach this market's loan", async () => {
       const { db, rows, at } = await deposited();
       await assert.rejects(onBorrow(db, at({ tokenId: 7n, poolId: POOL, amount: 1n }, MEME)), /never took into custody/);

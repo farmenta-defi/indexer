@@ -25,6 +25,15 @@ const activity = (
   ...figures,
 });
 
+// Every event of a loan names its pool, and must name the one `CollateralDeposited` did:
+// the contract emits `Loan.poolKeyId` each time (spec §4.1, FAR-42).
+function samePool(held: { poolId: Hex | null }, event: Log<{ tokenId: bigint; poolId: Hex }>) {
+  const { tokenId, poolId } = event.args;
+  if (held.poolId !== poolId) {
+    throw new Error(`position ${tokenId} on ${lower(event.log.address)}: event names pool ${poolId}, the loan ${held.poolId}`);
+  }
+}
+
 // Emitted by `depositCollateral`, `depositCollateralWithPermit`, `mintAndDeposit` and the
 // `safeTransferFrom` push alike, always after the NFT reached the market. The loan's pool
 // is the one the event names (spec §4.1, FAR-42). `position` only confirms it, where the
@@ -57,12 +66,13 @@ export async function onCollateralDeposited(db: Db, event: Log<{ tokenId: bigint
   await db.insert(loanActivity).values(activity(event, owner, "deposit"));
 }
 
-export async function onCollateralWithdrawn(db: Db, event: Log<{ tokenId: bigint; owner: Address }>) {
+export async function onCollateralWithdrawn(db: Db, event: Log<{ tokenId: bigint; owner: Address; poolId: Hex }>) {
   await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId } = event.args;
   const held = await db.find(loan, { market, tokenId });
   if (!held) throw new Error(`CollateralWithdrawn for position ${tokenId}, which ${market} never took into custody`);
+  samePool(held, event);
 
   await db.update(loan, { market, tokenId }).set({
     status: LOAN_STATUS.withdrawn,
@@ -72,12 +82,13 @@ export async function onCollateralWithdrawn(db: Db, event: Log<{ tokenId: bigint
   await db.insert(loanActivity).values(activity(event, lower(event.args.owner), "withdraw"));
 }
 
-export async function onBorrow(db: Db, event: Log<{ tokenId: bigint; amount: bigint }>) {
+export async function onBorrow(db: Db, event: Log<{ tokenId: bigint; poolId: Hex; amount: bigint }>) {
   await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId, amount } = event.args;
   const held = await db.find(loan, { market, tokenId });
   if (!held) throw new Error(`Borrow against position ${tokenId}, which ${market} never took into custody`);
+  samePool(held, event);
 
   await db.update(loan, { market, tokenId }).set({
     everBorrowed: true,
@@ -89,12 +100,13 @@ export async function onBorrow(db: Db, event: Log<{ tokenId: bigint; amount: big
 
 // `amount` is what was actually taken, after the cap at the outstanding debt. `everBorrowed`
 // stays true even when that was all of it: only `debtOf` can tell.
-export async function onRepay(db: Db, event: Log<{ tokenId: bigint; amount: bigint }>) {
+export async function onRepay(db: Db, event: Log<{ tokenId: bigint; poolId: Hex; amount: bigint }>) {
   await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId, amount } = event.args;
   const held = await db.find(loan, { market, tokenId });
   if (!held) throw new Error(`Repay for position ${tokenId}, which ${market} never took into custody`);
+  samePool(held, event);
 
   await db.update(loan, { market, tokenId }).set({
     repaidUsdg: held.repaidUsdg + amount,
@@ -103,20 +115,16 @@ export async function onRepay(db: Db, event: Log<{ tokenId: bigint; amount: bigi
   await db.insert(loanActivity).values(activity(event, held.owner, "repay", { amountUsdg: amount }));
 }
 
-// `LiquidityChanged` and `CollectFees` already carry the loan's `poolKeyId` (the other events
-// follow in FAR-42). It fills a pool that START_BLOCK_FLOOR left null, and must agree with
-// one taken from `position`: a mismatch means the salt-to-tokenId join is wrong.
+// `LiquidityChanged` and `CollectFees` change nothing on the loan but its last activity.
 async function touch(db: Db, event: Log<{ tokenId: bigint; poolId: Hex }>) {
   await noStaleBurn(db, event);
   const market = lower(event.log.address);
-  const { tokenId, poolId } = event.args;
+  const { tokenId } = event.args;
   const held = await db.find(loan, { market, tokenId });
   if (!held) throw new Error(`${market} changed position ${tokenId}, which it never took into custody`);
-  if (held.poolId !== null && held.poolId !== poolId) {
-    throw new Error(`position ${tokenId} on ${market}: event names pool ${poolId}, the position row ${held.poolId}`);
-  }
+  samePool(held, event);
 
-  await db.update(loan, { market, tokenId }).set({ poolId, lastActivityAt: event.block.timestamp });
+  await db.update(loan, { market, tokenId }).set({ lastActivityAt: event.block.timestamp });
   return held;
 }
 
