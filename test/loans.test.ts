@@ -47,7 +47,7 @@ async function minted(to: Address = ALICE) {
 async function deposited() {
   const store = await minted();
   await onTransfer(store.db, store.at({ from: ALICE, to: BLUE_CHIP, tokenId: 7n }));
-  await onCollateralDeposited(store.db, store.at({ tokenId: 7n, owner: ALICE }, BLUE_CHIP));
+  await onCollateralDeposited(store.db, store.at({ tokenId: 7n, owner: ALICE, poolId: POOL }, BLUE_CHIP));
   return store;
 }
 
@@ -97,7 +97,7 @@ describe("loan handlers", () => {
 
     it("`mintAndDeposit`: the NFT is minted to the market, the loan is the depositor's", async () => {
       const { db, rows, at } = await minted(MEME);
-      await onCollateralDeposited(db, at({ tokenId: 7n, owner: ALICE }, MEME));
+      await onCollateralDeposited(db, at({ tokenId: 7n, owner: ALICE, poolId: POOL }, MEME));
 
       assert.deepEqual(rows(schema.loan), [
         { ...IN_CUSTODY, market: MEME, depositedBlock: blockOf(3), depositedAt: timeOf(3), lastActivityAt: timeOf(3) },
@@ -107,7 +107,7 @@ describe("loan handlers", () => {
 
     it("`withdrawCollateral`: the loan leaves custody, and the NFT goes where the depositor sent it", async () => {
       const { db, rows, at } = await deposited();
-      await onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE }, BLUE_CHIP));
+      await onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE, poolId: POOL }, BLUE_CHIP));
       await onTransfer(db, at({ from: BLUE_CHIP, to: BOB, tokenId: 7n }));
 
       assert.deepEqual(rows(schema.loan), [
@@ -119,10 +119,10 @@ describe("loan handlers", () => {
 
     it("borrow then repay in full: totals add up, and the loan stays a candidate for debt", async () => {
       const { db, rows, at } = await deposited();
-      await onBorrow(db, at({ tokenId: 7n, amount: 300_000_000n }, BLUE_CHIP));
-      await onBorrow(db, at({ tokenId: 7n, amount: 200_000_000n }, BLUE_CHIP));
-      await onRepay(db, at({ tokenId: 7n, amount: 100_000_000n }, BLUE_CHIP));
-      await onRepay(db, at({ tokenId: 7n, amount: 400_000_123n }, BLUE_CHIP)); // the rest, with interest
+      await onBorrow(db, at({ tokenId: 7n, poolId: POOL, amount: 300_000_000n }, BLUE_CHIP));
+      await onBorrow(db, at({ tokenId: 7n, poolId: POOL, amount: 200_000_000n }, BLUE_CHIP));
+      await onRepay(db, at({ tokenId: 7n, poolId: POOL, amount: 100_000_000n }, BLUE_CHIP));
+      await onRepay(db, at({ tokenId: 7n, poolId: POOL, amount: 400_000_123n }, BLUE_CHIP)); // the rest, with interest
 
       assert.deepEqual(rows(schema.loan), [
         {
@@ -189,7 +189,7 @@ describe("loan handlers", () => {
 
     it("a full liquidation burns the position, and its `Liquidate` closes the loan", async () => {
       const { db, rows, at } = await deposited();
-      await onBorrow(db, at({ tokenId: 7n, amount: 300_000_000n }, BLUE_CHIP));
+      await onBorrow(db, at({ tokenId: 7n, poolId: POOL, amount: 300_000_000n }, BLUE_CHIP));
       // One transaction: the burn, its removal, then `Liquidate` with the flag set.
       const burn = at({ from: BLUE_CHIP, to: zeroAddress, tokenId: 7n });
       await onTransfer(db, burn);
@@ -197,7 +197,7 @@ describe("loan handlers", () => {
       await onModifyLiquidity(db, removal);
       // The burn alone does not close it (FAR-51): only `Liquidate` says it was a seizure.
       assert.equal(rows(schema.loan)[0]?.status, "in_custody");
-      const seized = { tokenId: 7n, liquidator: BOB, repaid: 300_000_000n, out0: 0n, out1: 0n, badDebt: 0n, fullSeizure: true };
+      const seized = { tokenId: 7n, liquidator: BOB, poolId: POOL, repaid: 300_000_000n, out0: 0n, out1: 0n, badDebt: 0n, fullSeizure: true };
       await onLiquidate(db, nextLog(removal, seized, BLUE_CHIP));
 
       assert.deepEqual(rows(schema.loan), [
@@ -217,8 +217,8 @@ describe("loan handlers", () => {
       const { db, rows, at } = await deposited();
       await onTransfer(db, at({ from: zeroAddress, to: MEME, tokenId: 8n }));
       await onModifyLiquidity(db, at(modify(8n, 500n)));
-      await onCollateralDeposited(db, at({ tokenId: 8n, owner: getAddress(BOB) }, getAddress(MEME)));
-      await onBorrow(db, at({ tokenId: 8n, amount: 1_000_000n }, getAddress(MEME)));
+      await onCollateralDeposited(db, at({ tokenId: 8n, owner: getAddress(BOB), poolId: POOL }, getAddress(MEME)));
+      await onBorrow(db, at({ tokenId: 8n, poolId: POOL, amount: 1_000_000n }, getAddress(MEME)));
 
       assert.deepEqual(
         rows(schema.loan).map(({ market, tokenId, owner, borrowedUsdg }) => ({ market, tokenId, owner, borrowedUsdg })),
@@ -233,9 +233,9 @@ describe("loan handlers", () => {
   describe("negative", () => {
     it("refuses borrow, repay and withdraw for a position the market never took into custody", async () => {
       const { db, at } = await minted();
-      await assert.rejects(onBorrow(db, at({ tokenId: 7n, amount: 1n }, BLUE_CHIP)), /never took into custody/);
-      await assert.rejects(onRepay(db, at({ tokenId: 7n, amount: 1n }, BLUE_CHIP)), /never took into custody/);
-      await assert.rejects(onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE }, BLUE_CHIP)), /never took into custody/);
+      await assert.rejects(onBorrow(db, at({ tokenId: 7n, poolId: POOL, amount: 1n }, BLUE_CHIP)), /never took into custody/);
+      await assert.rejects(onRepay(db, at({ tokenId: 7n, poolId: POOL, amount: 1n }, BLUE_CHIP)), /never took into custody/);
+      await assert.rejects(onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE, poolId: POOL }, BLUE_CHIP)), /never took into custody/);
       await assert.rejects(
         onLiquidityChanged(db, at({ tokenId: 7n, poolId: POOL, liqDelta: 1n }, BLUE_CHIP)),
         /never took into custody/,
@@ -244,6 +244,14 @@ describe("loan handlers", () => {
         onCollectFees(db, at({ tokenId: 7n, poolId: POOL, amount0: 0n, amount1: 0n }, BLUE_CHIP)),
         /never took into custody/,
       );
+    });
+
+    it("refuses a `CollateralDeposited` that names another pool than the position's", async () => {
+      const { db, rows, at } = await minted();
+      await onTransfer(db, at({ from: ALICE, to: BLUE_CHIP, tokenId: 7n }));
+      const event = at({ tokenId: 7n, owner: ALICE, poolId: OTHER_POOL }, BLUE_CHIP);
+      await assert.rejects(onCollateralDeposited(db, event), /event names pool 0x54f7\w+, the position row 0x387b/);
+      assert.deepEqual(rows(schema.loan), []);
     });
 
     it("refuses a market event that names another pool than the position's", async () => {
@@ -255,15 +263,39 @@ describe("loan handlers", () => {
       await assert.rejects(onCollectFees(db, fees), /event names pool/);
     });
 
+    it("refuses a `Borrow` or a `Repay` that names another pool than the position's", async () => {
+      const { db, rows, at } = await deposited();
+      const borrow = at({ tokenId: 7n, poolId: OTHER_POOL, amount: 1n }, BLUE_CHIP);
+      await assert.rejects(onBorrow(db, borrow), /event names pool 0x54f7\w+, the loan 0x387b/);
+      const repay = at({ tokenId: 7n, poolId: OTHER_POOL, amount: 1n }, BLUE_CHIP);
+      await assert.rejects(onRepay(db, repay), /event names pool 0x54f7\w+, the loan 0x387b/);
+      assert.deepEqual(rows(schema.loan), [IN_CUSTODY]);
+    });
+
+    it("refuses a `CollateralWithdrawn` that names another pool than the position's", async () => {
+      const { db, rows, at } = await deposited();
+      const event = at({ tokenId: 7n, owner: ALICE, poolId: OTHER_POOL }, BLUE_CHIP);
+      await assert.rejects(onCollateralWithdrawn(db, event), /event names pool 0x54f7\w+, the loan 0x387b/);
+      assert.deepEqual(rows(schema.loan), [IN_CUSTODY]);
+    });
+
+    it("a position whose mint was never seen is held to the pool its deposit named", async () => {
+      const { db } = fakeDb();
+      const at = chain();
+      await onCollateralDeposited(db, at({ tokenId: 7n, owner: ALICE, poolId: POOL }, BLUE_CHIP));
+      const event = at({ tokenId: 7n, poolId: OTHER_POOL, amount: 1n }, BLUE_CHIP);
+      await assert.rejects(onBorrow(db, event), /event names pool 0x54f7\w+, the loan 0x387b/);
+    });
+
     it("an event from the other market does not reach this market's loan", async () => {
       const { db, rows, at } = await deposited();
-      await assert.rejects(onBorrow(db, at({ tokenId: 7n, amount: 1n }, MEME)), /never took into custody/);
+      await assert.rejects(onBorrow(db, at({ tokenId: 7n, poolId: POOL, amount: 1n }, MEME)), /never took into custody/);
       assert.deepEqual(rows(schema.loan), [IN_CUSTODY]);
     });
 
     it("a burn by its holder after a withdrawal leaves the closed loan as it was", async () => {
       const { db, rows, at } = await deposited();
-      await onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE }, BLUE_CHIP));
+      await onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE, poolId: POOL }, BLUE_CHIP));
       await onTransfer(db, at({ from: BLUE_CHIP, to: ALICE, tokenId: 7n }));
       await onTransfer(db, at({ from: ALICE, to: zeroAddress, tokenId: 7n }));
 
@@ -276,7 +308,7 @@ describe("loan handlers", () => {
   describe("edge case", () => {
     it("only a loan in custody is closed by a burn: a withdrawn one keeps its own closing time", async () => {
       const { db, rows, at } = await deposited();
-      await onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE }, BLUE_CHIP)); // 5
+      await onCollateralWithdrawn(db, at({ tokenId: 7n, owner: ALICE, poolId: POOL }, BLUE_CHIP)); // 5
       // The market never burns a position it has released; the guard is what says so.
       await onTransfer(db, at({ from: BLUE_CHIP, to: zeroAddress, tokenId: 7n })); // 6
 
@@ -287,12 +319,12 @@ describe("loan handlers", () => {
 
     it("a redeposit by another owner starts the loan over; the earlier custody stays in `loan_activity`", async () => {
       const { db, rows, at } = await deposited();
-      await onBorrow(db, at({ tokenId: 7n, amount: 300_000_000n }, BLUE_CHIP)); // 5
-      await onRepay(db, at({ tokenId: 7n, amount: 300_000_001n }, BLUE_CHIP)); // 6
-      await onCollateralWithdrawn(db, at({ tokenId: 7n, owner: getAddress(ALICE) }, BLUE_CHIP)); // 7
+      await onBorrow(db, at({ tokenId: 7n, poolId: POOL, amount: 300_000_000n }, BLUE_CHIP)); // 5
+      await onRepay(db, at({ tokenId: 7n, poolId: POOL, amount: 300_000_001n }, BLUE_CHIP)); // 6
+      await onCollateralWithdrawn(db, at({ tokenId: 7n, owner: getAddress(ALICE), poolId: POOL }, BLUE_CHIP)); // 7
       await onTransfer(db, at({ from: BLUE_CHIP, to: BOB, tokenId: 7n })); // 8
       await onTransfer(db, at({ from: BOB, to: BLUE_CHIP, tokenId: 7n })); // 9
-      await onCollateralDeposited(db, at({ tokenId: 7n, owner: BOB }, BLUE_CHIP)); // 10
+      await onCollateralDeposited(db, at({ tokenId: 7n, owner: BOB, poolId: POOL }, BLUE_CHIP)); // 10
 
       assert.deepEqual(rows(schema.loan), [
         { ...IN_CUSTODY, owner: BOB, depositedBlock: blockOf(10), depositedAt: timeOf(10), lastActivityAt: timeOf(10) },
@@ -317,19 +349,17 @@ describe("loan handlers", () => {
       );
     });
 
-    it("a loan on a position whose mint was never seen (START_BLOCK_FLOOR) has a null pool, until an event names it", async () => {
+    it("a loan on a position whose mint was never seen (START_BLOCK_FLOOR) takes its pool from the event", async () => {
       const { db, rows } = fakeDb();
       const at = chain();
       await onTransfer(db, at({ from: ALICE, to: BLUE_CHIP, tokenId: 7n }));
-      await onCollateralDeposited(db, at({ tokenId: 7n, owner: ALICE }, BLUE_CHIP));
+      await onCollateralDeposited(db, at({ tokenId: 7n, owner: ALICE, poolId: POOL }, BLUE_CHIP));
 
+      // There is no position row to take a pool from, or to confirm one.
+      assert.deepEqual(rows(schema.position), []);
       assert.deepEqual(rows(schema.loan), [
-        { ...IN_CUSTODY, poolId: null, depositedBlock: blockOf(2), depositedAt: timeOf(2), lastActivityAt: timeOf(2) },
+        { ...IN_CUSTODY, depositedBlock: blockOf(2), depositedAt: timeOf(2), lastActivityAt: timeOf(2) },
       ]);
-
-      // `LiquidityChanged` and `CollectFees` carry the pool themselves, and fill it in.
-      await onCollectFees(db, at({ tokenId: 7n, poolId: POOL, amount0: 0n, amount1: 0n }, BLUE_CHIP));
-      assert.equal(rows(schema.loan)[0]?.poolId, POOL);
     });
   });
 });

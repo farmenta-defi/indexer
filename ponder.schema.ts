@@ -208,9 +208,9 @@ export const loan = onchainTable(
     tokenId: t.bigint().notNull(),
     // The depositor, who alone may borrow against and withdraw the position.
     owner: t.hex().notNull(),
-    // From `position`, until the market events carry `poolId` themselves (FAR-42). Null only
-    // when START_BLOCK_FLOOR skipped the position's mint.
-    poolId: t.hex(),
+    // Always from the market's events, which all name the loan's pool (spec §4.1). `position`
+    // only confirms it: an event that disagrees with it stops the indexer.
+    poolId: t.hex().notNull(),
     // "in_custody", "withdrawn" or "liquidated" (src/lib/loan.ts).
     status: t.text().notNull(),
     // True from the first `Borrow` of this custody. A candidate for debt, not proof of it:
@@ -281,9 +281,9 @@ export const liquidation = onchainTable(
     timestamp: t.bigint().notNull(),
     transactionHash: t.hex().notNull(),
     tokenId: t.bigint().notNull(),
-    // The liquidated loan's depositor and pool, copied from `loan`.
+    // The liquidated loan's depositor, copied from `loan`, and its pool, from `Liquidate`.
     owner: t.hex().notNull(),
-    poolId: t.hex(),
+    poolId: t.hex().notNull(),
     liquidator: t.hex().notNull(),
     // `Liquidate.fullSeizure` (FAR-51): true when the position was seized whole and burned,
     // which closes the loan, bad debt or not. A partial liquidation leaves it in custody.
