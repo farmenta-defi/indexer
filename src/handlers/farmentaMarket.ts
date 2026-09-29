@@ -60,16 +60,16 @@ export async function onCollateralDeposited(
         args: [tokenId],
       });
       if (info === 0n) throw new Error(`position ${tokenId} on ${market}: PositionManager returned empty position info`);
+      const derivedPoolId = poolIdOf(key as PoolKey);
+      if (derivedPoolId !== poolId.toLowerCase()) {
+        throw new Error(`position ${tokenId} on ${market}: PositionManager key hashes to ${derivedPoolId}, not ${poolId}`);
+      }
       const liquidity = await client.readContract({
         abi: positionManagerReadAbi,
         address: UNISWAP.positionManager.address,
         functionName: "getPositionLiquidity",
         args: [tokenId],
       });
-      const derivedPoolId = poolIdOf(key as PoolKey);
-      if (derivedPoolId !== poolId.toLowerCase()) {
-        throw new Error(`position ${tokenId} on ${market}: PositionManager key hashes to ${derivedPoolId}, not ${poolId}`);
-      }
       const tickLower = signedInt24((info >> 8n) & 0xffffffn);
       const tickUpper = signedInt24((info >> 32n) & 0xffffffn);
       minted = {

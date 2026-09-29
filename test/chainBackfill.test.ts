@@ -86,7 +86,7 @@ describe("chain reads for history skipped by START_BLOCK_FLOOR", () => {
     });
 
     describe("edge case", () => {
-      it("leaves an uninitialized pool key null without failing", async () => {
+      it("leaves an empty PositionManager key null without failing", async () => {
         const { db, rows } = fakeDb();
         const client = reader([{ ...key, tickSpacing: 0 }]);
         await onPoolListed(db, chain()({ poolId, tier: 1, params: terms }), client as never);
@@ -185,6 +185,7 @@ describe("chain reads for history skipped by START_BLOCK_FLOOR", () => {
           onCollateralDeposited(db, chain()({ tokenId, owner: MARKET, poolId: otherPoolId }, MARKET), client as never),
           /not/,
         );
+        assert.equal(client.calls.length, 1);
       });
     });
 
