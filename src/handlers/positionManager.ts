@@ -28,8 +28,8 @@ export async function onTransfer(db: Db, event: Log<{ from: Address; to: Address
       updatedAt: event.block.timestamp,
     });
   } else {
-    // No row means the mint was skipped by START_BLOCK_FLOOR (local development only). Its
-    // liquidity cannot be rebuilt from here on, so the position stays unknown.
+    // No row means the mint was skipped by START_BLOCK_FLOOR. A later collateral deposit
+    // may recover the position's current state.
     const known = await db.find(position, { tokenId });
     if (!known) return;
     await db.update(position, { tokenId }).set({ owner: to, burned: to === zeroAddress, updatedAt: event.block.timestamp });

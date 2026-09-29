@@ -19,13 +19,12 @@ function requireEnv(name: string): string {
   return value;
 }
 
-// No default RPC on purpose. Alchemy's free tier caps eth_getLogs at 10 blocks and the
-// public RPC answers 429 (spec §13, §14), so a silent fallback would turn a missing key
-// into a backfill that never finishes.
+// Keep the RPC explicit. A full backfill from block 9,070 was estimated to take 60 days on
+// the public RPC, so production uses a start block; live following is supported (FAR-84).
 const rpc = requireEnv("PONDER_RPC_URL");
 
-// Local development only: lifts every startBlock to at least this block, so `pnpm dev` does
-// not backfill the chain from block 9,070. Production leaves it unset.
+// The production floor is the first Farmenta deployment block (FAR-82). Missing historical
+// pool keys and deposited positions are recovered by their event handlers.
 const startBlockFloor = Number(process.env.START_BLOCK_FLOOR || 0);
 const from = (startBlock: number) => Math.max(startBlock, startBlockFloor);
 

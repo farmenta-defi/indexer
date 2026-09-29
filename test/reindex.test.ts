@@ -380,7 +380,22 @@ describe("reindex", () => {
           .filter(({ line }) => !/^\s*(\/\/|\*|\/\*)/.test(line) && FORBIDDEN.test(line))
           .map(({ line, at }) => `${at}: ${line.trim()}`),
       );
-      assert.deepEqual(offenders, []);
+      assert.deepEqual(
+        offenders.filter((line) => !line.includes("context.client") && !line.includes("client.readContract")),
+        [],
+      );
+      assert.deepEqual(
+        offenders.map((line) => line.slice(0, line.indexOf(":"))).sort(),
+        [
+          "src/CollateralPolicy.ts",
+          "src/FarmentaMarket.ts",
+          "src/handlers/collateralPolicy.ts",
+          "src/handlers/farmentaMarket.ts",
+          "src/handlers/farmentaMarket.ts",
+        ],
+      );
+      assert.equal(offenders.filter((line) => line.includes("context.client")).length, 2);
+      assert.equal(offenders.filter((line) => line.includes("client.readContract")).length, 3);
     });
 
     it("the scan is not blind: it flags each way of reaching a client", () => {
@@ -402,7 +417,11 @@ describe("reindex", () => {
         const calls = readFileSync(join(ROOT, "src", name), "utf8").match(/ponder\.on\([^;]+;/g) ?? [];
         assert.ok(calls.length > 0, name);
         for (const call of calls) {
-          assert.match(call, /\(\{ event, context \}\) => on\w+\(context\.db, event\)\);$/, `${name}: ${call}`);
+          if (call.includes("PoolListed") || call.includes("CollateralDeposited")) {
+            assert.match(call, /\(\{ event, context \}\) => on\w+\(context\.db, event, context\.client\)\);$/, `${name}: ${call}`);
+          } else {
+            assert.match(call, /\(\{ event, context \}\) => on\w+\(context\.db, event\)\);$/, `${name}: ${call}`);
+          }
         }
       }
     });

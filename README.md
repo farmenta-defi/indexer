@@ -8,9 +8,11 @@ Specification: [`farmenta-defi/docs`](https://github.com/farmenta-defi/docs) →
 
 The indexer records what happened on chain and nothing else. `PositionManager` has no
 `ERC721Enumerable` and `FarmentaMarket` keeps no list of loans, so the list of active loans
-only exists here, rebuilt from events. It does **not** compute health factors and does not
-call contracts: HF moves with every price tick without any event, and a Ponder reindex
-replays every `eth_call` (spec §13). HF belongs to the backend and the keeper.
+only exists here, rebuilt from events. It does **not** compute health factors: HF moves with
+every price tick without any event, and belongs to the backend and keeper. Two narrowly scoped
+reads recover PoolKeys and deposited positions whose creating events predate the production
+start block. PoolKeys are read at `latest` because they never change; position state is read at
+the deposit block because liquidity changes (FAR-82).
 
 > **Status: pools and listings (FAR-34); positions, loans, liquidations and vault activity
 > (FAR-35).** Exact debt and HF are not here and cannot be: see [Loans](#loans).
@@ -26,7 +28,7 @@ replays every `eth_call` (spec §13). HF belongs to the backend and the keeper.
 | `abis/source.json` | The `smart-contract` commit the ABIs were built from |
 | `ponder.schema.ts` | Tables — see [Tables](#tables) |
 | `src/PoolManager.ts`, `src/PositionManager.ts`, `src/CollateralPolicy.ts`, `src/TwapRecorder.ts`, `src/FarmentaMarket.ts` | Registers the indexing functions with Ponder, one file per contract |
-| `src/handlers/` | What those functions do. They receive the store and nothing else, so they cannot make an `eth_call`, and `pnpm test` runs them against an in-memory store |
+| `src/handlers/` | What those functions do. Only PoolListed and CollateralDeposited receive the chain client; `pnpm test` runs handlers against an in-memory store |
 | `src/lib/` | Pure helpers (pool id, LT ramp, API view), unit-tested without Ponder |
 | `src/api/app.ts`, `src/api/index.ts` | HTTP routes on top of Ponder's built-in ones — see [Queries](#queries). `app.ts` holds the routes and takes the store as an argument, so `pnpm test` runs them against an in-memory Postgres; `index.ts` hands it Ponder's |
 | `test/fixtures/` | Real logs of fixture positions (spec §14, §18), replayed by `test/realPositions.test.ts` |
@@ -62,21 +64,41 @@ until `POSTGRES_PASSWORD` is set in `.env`.
 `DATABASE_URL` must name database `farmenta`; the config refuses anything else, so a pasted
 lp-monitor-v2 URL fails at startup instead of writing into `lpmon`.
 
-**RPC.** `PONDER_RPC_URL` is required and has no fallback, on purpose. Alchemy's free tier
-caps `eth_getLogs` at 10 blocks — about one second of this chain — and the public RPC
-answers 429 (spec §13, §14), so neither can backfill from block 9,070. With a free-tier key
-you can still run the indexer locally by setting `START_BLOCK_FLOOR` to a recent block, which
-lifts every start block; expect 429 warnings while it catches up. Never set it in production.
-Keep the floor at or below the block the first Farmenta contract was deployed in: a
-`PoolTermsUpdated`, `PoolFrozen` or `LtRampScheduled` for a pool whose `PoolListed` was skipped,
-a `CollateralWithdrawn`, `Borrow`, `Repay` or `Liquidate` for a loan whose `CollateralDeposited`
-was skipped, or vault shares leaving a holder whose deposit was skipped, stops the indexer, because a row that cannot be right is worse than no row. Positions are the
-exception, as their mints go back to block 9,073: one minted before the floor is left out
-silently. A loan on it still has its `poolId`, which comes from the market's events, and is on
-the keeper's list; its range and liquidity are null in `/loans`, and no `position` row confirms
-its pool: one more reason never to set the floor in production.
+**RPC.** `PONDER_RPC_URL` is required and has no fallback. Production follows the chain on the
+public RPC (spec v2.07). `START_BLOCK_FLOOR=74901824` is the first Farmenta deployment block;
+the floor was chosen because starting Uniswap history at block 9,070 was estimated to take
+about 60 days. Since FAR-84, the public RPC follows the chain at a measured 1.06 requests per
+block; the floor keeps the initial backfill tractable. Locally, leave the floor unset for full
+history or set it to a recent block to test current events.
 
-**Farmenta addresses.** None is written in code: mainnet is not deployed yet (FAR-23), and
+The floor skips Uniswap events before block 74,901,824. In particular, the listed ETH/USDG
+pool `0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551` was initialized at
+block 41,259,014. When `PoolListed` finds no `uniswap_pool` row, it reads
+`PositionManager.poolKeys(bytes25(poolId))` at `latest`, checks that the key hashes to the
+pool id, and stores the key on `pool`. An empty key (`tickSpacing == 0`) means the
+PositionManager has not minted a position in that pool; the pool may still be initialized and
+traded. Its key columns stay null without stopping indexing.
+
+Position mints before the floor have no `position` row. When one of those NFTs is deposited
+as collateral, the handler reads `getPoolAndPositionInfo(tokenId)` and
+`getPositionLiquidity(tokenId)` at the deposit block to create its row. Mint block/time stay
+null because their events were skipped; later `ModifyLiquidity` and `Transfer` events update
+the row normally. If the RPC has no state for that block, the handler warns with the token id
+and block, omits the position row, keeps the loan, and continues indexing. Other read errors
+still stop indexing. Same-block `ModifyLiquidity` events are not added again because the
+recovered state includes the full block.
+Rows already rebuilt from history do not trigger chain reads. Older positions never deposited
+remain absent, while loan pool ids still come from market events and remain available to the
+keeper. Existing backend `/pools/{poolId}` and keeper `pools()` responses then receive the
+same five populated key columns from `pool` without code changes.
+
+Events before the floor are still outside the backfill: loans deposited before block
+74,901,824 have no `loan` row, so a later loan event that requires custody state cannot be
+reconstructed; vault transfers whose initial share mint was skipped likewise lack its earlier
+balance history. The production deployment was started at the first Farmenta deployment block,
+and these remain the consequences if that floor is raised further.
+
+**Farmenta addresses.** None is written in code: deployed addresses are network-specific, and
 a fork or redeploy moves all of them. Copy `deployments/example.json` to
 `deployments/<name>.json`, fill in each address and the block it was deployed in, and set
 `FARMENTA_DEPLOYMENT=<name>`. The loader refuses the zero address, so the example cannot be
@@ -89,19 +111,21 @@ block (Arbitrum Orbit, spec §14), so nothing here derives time from block numbe
 
 ## Tables
 
-Every table is written from events alone, with no `eth_call`, so a reindex from zero rebuilds
-identical rows.
+Most tables are written from events alone. `PoolListed` and `CollateralDeposited` also make
+`eth_call`s to recover data whose source events predate the configured start block. The
+immutable pool key is read at `latest`; the position is read at its deposit block. Ponder
+caches the reads in its sync store.
 
 | Table | Written by | Holds |
 |---|---|---|
-| `uniswap_pool` | PoolManager `Initialize` | PoolKey of every pool on the chain, listed or not |
-| `pool` | CollateralPolicy `PoolListed`, `PoolTermsUpdated`, `PoolFrozen`, `LtRampScheduled` | Listed pools only: key, tier, terms in force, `frozen`, current ramp. `id` is the frontend's `marketId` |
+| `uniswap_pool` | PoolManager `Initialize` | PoolKeys initialized within the indexed block range, listed or not |
+| `pool` | CollateralPolicy events; reads PoolKey on `PoolListed` if its `Initialize` predates the range | Listed pools only: key, tier, terms in force, `frozen`, current ramp. `id` is the frontend's `marketId` |
 | `pool_terms_change` | `PoolListed`, `PoolTermsUpdated` | Every set of terms a pool has had |
 | `lt_ramp` | `LtRampScheduled` | Every ramp ever scheduled |
 | `token`, `hook` | `TokenConfigured`, `HookAllowlisted` | Latest config per currency and per hook (owner console, FAR-41) |
 | `twap_observation` | TwapRecorder `Recorded` | One row per observation, keyed by pool and timestamp |
 | `twap_pool` | `Recorded` | Newest observation per pool: `last_observation_at` |
-| `position` | PositionManager `Transfer`, PoolManager `ModifyLiquidity` | Every position NFT on the chain: holder, pool, ticks, liquidity, `burned` |
+| `position` | PositionManager `Transfer`, PoolManager `ModifyLiquidity`; reads position state on `CollateralDeposited` if its mint predates the range | Observed positions and older positions deposited as collateral: holder, pool, ticks, liquidity, `burned` |
 | `position_transfer` | PositionManager `Transfer` | Every transfer, mint and burn included |
 | `loan` | FarmentaMarket `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `Liquidate` | One row per market and tokenId: depositor, pool, `status`, `everBorrowed`, running totals |
 | `loan_activity` | `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `LiquidityChanged`, `CollectFees` | The borrower side of the transaction history |
@@ -112,10 +136,11 @@ identical rows.
 | `vault_balance` | share `Transfer` | Shares per market and holder: what `balanceOf` returns |
 
 `PoolListed` does not carry the PoolKey, which exists only in `Initialize`, often emitted long
-before Farmenta was deployed. That is why `Initialize` is indexed from the PoolManager's deploy
-block, and why `uniswap_pool` exists at all. The key columns of `pool` are null only while
-`Initialize` has not been seen: `list` does not require the pool to exist, and
-`START_BLOCK_FLOOR` can skip the event locally. They are filled in when it arrives.
+before Farmenta was deployed. `uniswap_pool` records `Initialize` events within the configured
+range. If a listed pool's `Initialize` predates that range, the `PoolListed` handler reads its
+PoolKey at `latest` and writes the key directly to `pool`. Key columns remain null if the
+PositionManager has never minted a position for the pool; this does not mean the pool is
+uninitialized.
 
 A pool's first observation has `index 0` and `tickCumulative 0`. That is the recorder
 initializing the pool, not broken data. `record` is permissionless, so `twap_pool` may hold
@@ -126,19 +151,20 @@ The effective LT is **not** a column: during a ramp it depends on the time it is
 
 ### Positions
 
-`PositionManager` has no `ERC721Enumerable` (spec §12), and a position that becomes collateral
-was usually minted long before Farmenta existed, so **every** position NFT is indexed, from
-the PositionManager's deploy block. The PositionManager always calls `modifyLiquidity` with
-`salt = bytes32(tokenId)`, so `ModifyLiquidity` alone gives a tokenId its pool, ticks and
-liquidity, with no `eth_call`; `ponder.config.ts` filters that event on
-`sender = PositionManager`. `test/realPositions.test.ts` replays the real logs of two fixture
-positions and gets the figures the contracts' fork tests read from `getPoolAndPositionInfo`
-and `getPositionLiquidity`.
+`PositionManager` has no `ERC721Enumerable` (spec §12). Within the indexed range, the
+PositionManager's `Transfer` and PoolManager's `ModifyLiquidity` events provide position
+history. A position first deposited as collateral after the range starts may have been minted
+earlier, so `CollateralDeposited` reads its pool, ticks and liquidity at that event's block and
+creates the missing row. An older position never deposited as collateral remains unknown.
+`ponder.config.ts` filters `ModifyLiquidity` on `sender = PositionManager`.
+`test/realPositions.test.ts` replays the real logs of two fixture positions and gets the figures
+the contracts' fork tests read from `getPoolAndPositionInfo` and `getPositionLiquidity`.
 
 `position.owner` is whoever holds the NFT: **the market** while the position is collateral
 (the depositor is `loan.owner`), the zero address once burned. A burned row stays, with
-`liquidity` 0. With `START_BLOCK_FLOOR` set, a position minted before the floor is not
-indexed at all, because its liquidity could not be right.
+`liquidity` 0. With `START_BLOCK_FLOOR` set, an older position is only indexed if it is
+deposited as collateral after the floor; positions never deposited after the floor remain
+unknown.
 
 ### Loans
 
@@ -390,8 +416,8 @@ cp .env.example .env && chmod 600 .env
 install this repo ([Ponder patch](#ponder-patch)).
 
 `chmod 600` because the file holds the database password and the RPC key. Fill it in: the
-paid `PONDER_RPC_URL`, `DATABASE_URL` for the `farmenta_indexer` role (shape in
-`.env.example`), `FARMENTA_DEPLOYMENT` once there is one, and a `PORT` that is free on the
+production `PONDER_RPC_URL`, `DATABASE_URL` for the `farmenta_indexer` role (shape in
+`.env.example`), `FARMENTA_DEPLOYMENT` for the target deployment, and a `PORT` that is free on the
 VPS — 42070 already belongs to the lp-monitor-v2 indexer. Leave `START_BLOCK_FLOOR` and
 `POSTGRES_PASSWORD` empty; the latter is only for the local Docker database.
 
@@ -408,7 +434,7 @@ curl -s localhost:<PORT>/status
 ```
 
 Ponder logs the database as host, port and name, without credentials. It does print the full
-RPC URL when a request fails, and most paid RPC URLs end in the API key: treat `pm2 logs`
+RPC URL when a request fails, and configured RPC URLs may contain API keys: treat `pm2 logs`
 output as secret and strip the key before pasting it anywhere.
 
 **4. Update.** `git pull && corepack pnpm install --frozen-lockfile && pm2 restart farmenta-indexer`.
