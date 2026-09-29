@@ -307,12 +307,12 @@ const EXPECTED = {
     },
   ],
   loan_activity: [
-    { ...activity(20), tokenId: 7n, owner: BOB, kind: "deposit", ...NO_FIGURES },
-    { ...activity(21), tokenId: 7n, owner: BOB, kind: "borrow", ...NO_FIGURES, amountUsdg: 300_000_000n },
-    { ...activity(22), tokenId: 7n, owner: BOB, kind: "repay", ...NO_FIGURES, amountUsdg: 100_000_000n },
-    { ...activity(29), tokenId: 9n, owner: ALICE, kind: "deposit", ...NO_FIGURES },
-    { ...activity(31), tokenId: 9n, owner: ALICE, kind: "increase_liquidity", ...NO_FIGURES, liquidityDelta: 50n },
-    { ...activity(32), tokenId: 9n, owner: ALICE, kind: "collect_fees", ...NO_FIGURES, amount0: 11n, amount1: 22_000n },
+    { ...activity(20), poolId: LISTED_ID, tokenId: 7n, owner: BOB, kind: "deposit", ...NO_FIGURES },
+    { ...activity(21), poolId: LISTED_ID, tokenId: 7n, owner: BOB, kind: "borrow", ...NO_FIGURES, amountUsdg: 300_000_000n },
+    { ...activity(22), poolId: LISTED_ID, tokenId: 7n, owner: BOB, kind: "repay", ...NO_FIGURES, amountUsdg: 100_000_000n },
+    { ...activity(29), poolId: LISTED_ID, tokenId: 9n, owner: ALICE, kind: "deposit", ...NO_FIGURES },
+    { ...activity(31), poolId: LISTED_ID, tokenId: 9n, owner: ALICE, kind: "increase_liquidity", ...NO_FIGURES, liquidityDelta: 50n },
+    { ...activity(32), poolId: LISTED_ID, tokenId: 9n, owner: ALICE, kind: "collect_fees", ...NO_FIGURES, amount0: 11n, amount1: 22_000n },
   ],
   // Logs 33 to 36 of the transaction opened by event 23.
   liquidation: [
