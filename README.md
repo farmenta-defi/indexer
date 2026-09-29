@@ -128,8 +128,8 @@ caches the reads in its sync store.
 | `position` | PositionManager `Transfer`, PoolManager `ModifyLiquidity`; reads position state on `CollateralDeposited` if its mint predates the range | Observed positions and older positions deposited as collateral: holder, pool, ticks, liquidity, `burned` |
 | `position_transfer` | PositionManager `Transfer` | Every transfer, mint and burn included |
 | `loan` | FarmentaMarket `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `Liquidate` | One row per market and tokenId: depositor, pool, `status`, `everBorrowed`, running totals |
-| `loan_activity` | `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `LiquidityChanged`, `CollectFees` | The borrower side of the transaction history |
-| `liquidation` | `Liquidate`, `BadDebtSocialized` | One row per liquidation, partial or full |
+| `loan_activity` | `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `LiquidityChanged`, `CollectFees` | The borrower side of the transaction history, with `poolId` indexed for pool activity queries |
+| `liquidation` | `Liquidate`, `BadDebtSocialized` | One row per liquidation, partial or full, with an index on `poolId` |
 | `bad_debt_socialized` | `BadDebtSocialized` | Every loss written off against lenders |
 | `pending_burn` | PositionManager `Transfer` to zero, `Liquidate` | A market's burn waiting for its full-seizure `Liquidate`; empty whenever the indexer runs |
 | `vault_activity` | ERC-4626 `Deposit`, `Withdraw`, share `Transfer` | The lender side of the transaction history |

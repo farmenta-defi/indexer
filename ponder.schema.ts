@@ -244,6 +244,7 @@ export const loanActivity = onchainTable(
   "loan_activity",
   (t) => ({
     market: t.hex().notNull(),
+    poolId: t.hex().notNull(),
     blockNumber: t.bigint().notNull(),
     logIndex: t.integer().notNull(),
     timestamp: t.bigint().notNull(),
@@ -268,6 +269,7 @@ export const loanActivity = onchainTable(
   }),
   (table) => ({
     pk: primaryKey({ columns: [table.market, table.blockNumber, table.logIndex] }),
+    poolIdx: index().on(table.poolId),
     ownerIdx: index().on(table.owner),
     tokenIdx: index().on(table.market, table.tokenId),
   }),
@@ -305,6 +307,7 @@ export const liquidation = onchainTable(
   }),
   (table) => ({
     pk: primaryKey({ columns: [table.market, table.blockNumber, table.logIndex] }),
+    poolIdx: index().on(table.poolId),
     ownerIdx: index().on(table.owner),
     liquidatorIdx: index().on(table.liquidator),
     tokenIdx: index().on(table.market, table.tokenId),
