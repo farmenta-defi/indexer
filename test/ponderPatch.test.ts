@@ -21,6 +21,7 @@ const running = readRateLimit(read("node_modules/ponder/dist/esm/rpc/index.js"))
 const shippedSource = readRateLimit(read("node_modules/ponder/src/rpc/index.ts"));
 
 const manifest = JSON.parse(read("package.json")) as {
+  engines: Record<string, string>;
   dependencies: Record<string, string>;
   pnpm?: { patchedDependencies?: Record<string, string> };
 };
@@ -64,6 +65,10 @@ describe("installed Ponder", () => {
       assert.match(pinned ?? "", /^\d+\.\d+\.\d+$/, "ponder must be pinned exactly, not as a range");
       assert.equal(installed.version, pinned);
       assert.deepEqual(manifest.pnpm?.patchedDependencies, { [`ponder@${pinned}`]: `patches/ponder@${pinned}.patch` });
+    });
+
+    it("asks for pnpm 10: pnpm 9 rejects the patch hash pnpm 10 wrote to the lockfile", () => {
+      assert.equal(manifest.engines.pnpm, ">=10");
     });
   });
 });
