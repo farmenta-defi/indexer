@@ -15,12 +15,13 @@ type Kind = "deposit" | "withdraw" | "borrow" | "repay" | "increase_liquidity" |
 const NO_FIGURES = { amountUsdg: null, liquidityDelta: null, amount0: null, amount1: null };
 
 const activity = (
-  event: Log<{ tokenId: bigint }>,
+  event: Log<{ tokenId: bigint; poolId: Hex }>,
   owner: Address,
   kind: Kind,
   figures: Partial<Record<keyof typeof NO_FIGURES, bigint>> = {},
 ) => ({
   ...marketLogKey(event),
+  poolId: lower(event.args.poolId),
   tokenId: event.args.tokenId,
   owner,
   kind,

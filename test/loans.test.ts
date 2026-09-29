@@ -71,6 +71,7 @@ const NO_FIGURES = { amountUsdg: null, liquidityDelta: null, amount0: null, amou
 
 const activityRow = (n: number, kind: string, figures: Partial<Record<keyof typeof NO_FIGURES, bigint>> = {}) => ({
   market: BLUE_CHIP,
+  poolId: POOL,
   blockNumber: blockOf(n),
   logIndex: logIndexOf(n),
   timestamp: timeOf(n),
@@ -140,6 +141,21 @@ describe("loan handlers", () => {
         activityRow(7, "repay", { amountUsdg: 100_000_000n }),
         activityRow(8, "repay", { amountUsdg: 400_000_123n }),
       ]);
+    });
+
+    it("records each activity under the pool named by its loan events", async () => {
+      const { db, rows, at } = await deposited();
+      await onBorrow(db, at({ tokenId: 7n, poolId: POOL, amount: 300_000_000n }, BLUE_CHIP));
+      await onRepay(db, at({ tokenId: 7n, poolId: POOL, amount: 100_000_000n }, BLUE_CHIP));
+
+      assert.deepEqual(
+        rows(schema.loanActivity).map(({ poolId, kind }) => ({ poolId, kind })),
+        [
+          { poolId: POOL, kind: "deposit" },
+          { poolId: POOL, kind: "borrow" },
+          { poolId: POOL, kind: "repay" },
+        ],
+      );
     });
 
     it("adding, removing and claiming fees on collateral: history rows, liquidity from `ModifyLiquidity`", async () => {
