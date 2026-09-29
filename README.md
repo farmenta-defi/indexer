@@ -11,7 +11,8 @@ The indexer records what happened on chain and nothing else. `PositionManager` h
 only exists here, rebuilt from events. It does **not** compute health factors: HF moves with
 every price tick without any event, and belongs to the backend and keeper. Two narrowly scoped
 reads recover PoolKeys and deposited positions whose creating events predate the production
-start block; Ponder runs them at the event block and caches them in `ponder_sync` (FAR-82).
+start block. PoolKeys are read at `latest` because they never change; position state is read at
+the deposit block because liquidity changes (FAR-82).
 
 > **Status: pools and listings (FAR-34); positions, loans, liquidations and vault activity
 > (FAR-35).** Exact debt and HF are not here and cannot be: see [Loans](#loans).
@@ -27,7 +28,7 @@ start block; Ponder runs them at the event block and caches them in `ponder_sync
 | `abis/source.json` | The `smart-contract` commit the ABIs were built from |
 | `ponder.schema.ts` | Tables — see [Tables](#tables) |
 | `src/PoolManager.ts`, `src/PositionManager.ts`, `src/CollateralPolicy.ts`, `src/TwapRecorder.ts`, `src/FarmentaMarket.ts` | Registers the indexing functions with Ponder, one file per contract |
-| `src/handlers/` | What those functions do. They receive the store and nothing else, so they cannot make an `eth_call`, and `pnpm test` runs them against an in-memory store |
+| `src/handlers/` | What those functions do. Only PoolListed and CollateralDeposited receive the chain client; `pnpm test` runs handlers against an in-memory store |
 | `src/lib/` | Pure helpers (pool id, LT ramp, API view), unit-tested without Ponder |
 | `src/api/app.ts`, `src/api/index.ts` | HTTP routes on top of Ponder's built-in ones — see [Queries](#queries). `app.ts` holds the routes and takes the store as an argument, so `pnpm test` runs them against an in-memory Postgres; `index.ts` hands it Ponder's |
 | `test/fixtures/` | Real logs of fixture positions (spec §14, §18), replayed by `test/realPositions.test.ts` |
@@ -63,25 +64,29 @@ until `POSTGRES_PASSWORD` is set in `.env`.
 `DATABASE_URL` must name database `farmenta`; the config refuses anything else, so a pasted
 lp-monitor-v2 URL fails at startup instead of writing into `lpmon`.
 
-**RPC.** `PONDER_RPC_URL` is required and has no fallback, on purpose. Alchemy's free tier
-caps `eth_getLogs` at 10 blocks — about one second of this chain — and the public RPC
-answers 429 (spec §13, §14), so the production indexer uses
-`START_BLOCK_FLOOR=74901824`, the first Farmenta deployment block chosen on 29 Sep 2026
-(spec v2.07). Starting Uniswap history at block 9,070 was estimated to take about 60 days;
-the selected floor backfilled 105,000 blocks in 7 minutes 32 seconds. Locally, leave the
-floor unset for full history or set it to a recent block to test current events.
+**RPC.** `PONDER_RPC_URL` is required and has no fallback. Production follows the chain on the
+public RPC (spec v2.07). `START_BLOCK_FLOOR=74901824` is the first Farmenta deployment block;
+the floor was chosen because starting Uniswap history at block 9,070 was estimated to take
+about 60 days. Since FAR-84, the public RPC follows the chain at a measured 1.06 requests per
+block; the floor keeps the initial backfill tractable. Locally, leave the floor unset for full
+history or set it to a recent block to test current events.
 
 The floor skips Uniswap events before block 74,901,824. In particular, the listed ETH/USDG
 pool `0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551` was initialized at
 block 41,259,014. When `PoolListed` finds no `uniswap_pool` row, it reads
-`PositionManager.poolKeys(bytes25(poolId))`, checks that the key hashes to the pool id, and
-stores the key on `pool`. An empty key (`tickSpacing == 0`) leaves those columns null without
-stopping indexing.
+`PositionManager.poolKeys(bytes25(poolId))` at `latest`, checks that the key hashes to the
+pool id, and stores the key on `pool`. An empty key (`tickSpacing == 0`) means the
+PositionManager has not minted a position in that pool; the pool may still be initialized and
+traded. Its key columns stay null without stopping indexing.
 
 Position mints before the floor have no `position` row. When one of those NFTs is deposited
 as collateral, the handler reads `getPoolAndPositionInfo(tokenId)` and
-`getPositionLiquidity(tokenId)` to create its row. Mint block/time stay null because their
-events were skipped; later `ModifyLiquidity` and `Transfer` events update the row normally.
+`getPositionLiquidity(tokenId)` at the deposit block to create its row. Mint block/time stay
+null because their events were skipped; later `ModifyLiquidity` and `Transfer` events update
+the row normally. If the RPC has no state for that block, the handler warns with the token id
+and block, omits the position row, keeps the loan, and continues indexing. Other read errors
+still stop indexing. Same-block `ModifyLiquidity` events are not added again because the
+recovered state includes the full block.
 Rows already rebuilt from history do not trigger chain reads. Older positions never deposited
 remain absent, while loan pool ids still come from market events and remain available to the
 keeper. Existing backend `/pools/{poolId}` and keeper `pools()` responses then receive the
@@ -93,7 +98,7 @@ reconstructed; vault transfers whose initial share mint was skipped likewise lac
 balance history. The production deployment was started at the first Farmenta deployment block,
 and these remain the consequences if that floor is raised further.
 
-**Farmenta addresses.** None is written in code: mainnet is not deployed yet (FAR-23), and
+**Farmenta addresses.** None is written in code: deployed addresses are network-specific, and
 a fork or redeploy moves all of them. Copy `deployments/example.json` to
 `deployments/<name>.json`, fill in each address and the block it was deployed in, and set
 `FARMENTA_DEPLOYMENT=<name>`. The loader refuses the zero address, so the example cannot be
@@ -107,9 +112,9 @@ block (Arbitrum Orbit, spec §14), so nothing here derives time from block numbe
 ## Tables
 
 Most tables are written from events alone. `PoolListed` and `CollateralDeposited` also make
-event-block `eth_call`s to recover pool keys and positions whose source events predate the
-configured start block. Those reads are cached in Ponder's sync store, so a reindex with the
-same start block rebuilds the same rows.
+`eth_call`s to recover data whose source events predate the configured start block. The
+immutable pool key is read at `latest`; the position is read at its deposit block. Ponder
+caches the reads in its sync store.
 
 | Table | Written by | Holds |
 |---|---|---|
@@ -133,8 +138,9 @@ same start block rebuilds the same rows.
 `PoolListed` does not carry the PoolKey, which exists only in `Initialize`, often emitted long
 before Farmenta was deployed. `uniswap_pool` records `Initialize` events within the configured
 range. If a listed pool's `Initialize` predates that range, the `PoolListed` handler reads its
-PoolKey at the event block and writes the key directly to `pool`. Key columns remain null only
-if the contract returns an empty key (the pool is not initialized).
+PoolKey at `latest` and writes the key directly to `pool`. Key columns remain null if the
+PositionManager has never minted a position for the pool; this does not mean the pool is
+uninitialized.
 
 A pool's first observation has `index 0` and `tickCumulative 0`. That is the recorder
 initializing the pool, not broken data. `record` is permissionless, so `twap_pool` may hold
@@ -410,8 +416,8 @@ cp .env.example .env && chmod 600 .env
 install this repo ([Ponder patch](#ponder-patch)).
 
 `chmod 600` because the file holds the database password and the RPC key. Fill it in: the
-paid `PONDER_RPC_URL`, `DATABASE_URL` for the `farmenta_indexer` role (shape in
-`.env.example`), `FARMENTA_DEPLOYMENT` once there is one, and a `PORT` that is free on the
+production `PONDER_RPC_URL`, `DATABASE_URL` for the `farmenta_indexer` role (shape in
+`.env.example`), `FARMENTA_DEPLOYMENT` for the target deployment, and a `PORT` that is free on the
 VPS — 42070 already belongs to the lp-monitor-v2 indexer. Leave `START_BLOCK_FLOOR` and
 `POSTGRES_PASSWORD` empty; the latter is only for the local Docker database.
 
@@ -428,7 +434,7 @@ curl -s localhost:<PORT>/status
 ```
 
 Ponder logs the database as host, port and name, without credentials. It does print the full
-RPC URL when a request fails, and most paid RPC URLs end in the API key: treat `pm2 logs`
+RPC URL when a request fails, and configured RPC URLs may contain API keys: treat `pm2 logs`
 output as secret and strip the key before pasting it anywhere.
 
 **4. Update.** `git pull && corepack pnpm install --frozen-lockfile && pm2 restart farmenta-indexer`.
