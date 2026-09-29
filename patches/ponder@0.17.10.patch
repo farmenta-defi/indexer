@@ -1,0 +1,26 @@
+diff --git a/dist/esm/rpc/index.js b/dist/esm/rpc/index.js
+index 04f280f54d91cfdce126f560cbbb568e28cfca1a..51dbc16acc19877dcdcd2c154d37e7cd053a4e5a 100644
+--- a/dist/esm/rpc/index.js
++++ b/dist/esm/rpc/index.js
+@@ -25,7 +25,7 @@ const LATENCY_HURDLE_RATE = 0.1;
+ /** Exploration rate. */
+ const EPSILON = 0.1;
+ const INITIAL_MAX_RPS = 20;
+-const MIN_RPS = 3;
++const MIN_RPS = 15;
+ const MAX_RPS = 500;
+ const RPS_INCREASE_FACTOR = 1.05;
+ const RPS_DECREASE_FACTOR = 0.95;
+diff --git a/src/rpc/index.ts b/src/rpc/index.ts
+index d420f0fec973ab96186e01bcb36c481f7a915e85..4b1b087771c7fe4c974baf006708a21b7c46b4bc 100644
+--- a/src/rpc/index.ts
++++ b/src/rpc/index.ts
+@@ -93,7 +93,7 @@ const LATENCY_HURDLE_RATE = 0.1;
+ /** Exploration rate. */
+ const EPSILON = 0.1;
+ const INITIAL_MAX_RPS = 20;
+-const MIN_RPS = 3;
++const MIN_RPS = 15;
+ const MAX_RPS = 500;
+ const RPS_INCREASE_FACTOR = 1.05;
+ const RPS_DECREASE_FACTOR = 0.95;

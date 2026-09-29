@@ -31,14 +31,17 @@ replays every `eth_call` (spec §13). HF belongs to the backend and the keeper.
 | `src/api/app.ts`, `src/api/index.ts` | HTTP routes on top of Ponder's built-in ones — see [Queries](#queries). `app.ts` holds the routes and takes the store as an argument, so `pnpm test` runs them against an in-memory Postgres; `index.ts` hands it Ponder's |
 | `test/fixtures/` | Real logs of fixture positions (spec §14, §18), replayed by `test/realPositions.test.ts` |
 | `scripts/create-db-role.sql` | Database and role on the shared Postgres server |
+| `patches/` | The one change made to Ponder itself, applied by `pnpm install`: see [Ponder patch](#ponder-patch) |
 | `ecosystem.config.cjs` | pm2 process file |
 
 ## Local setup
 
-Needs Node ≥ 22, pnpm and Docker.
+Needs Node ≥ 22, pnpm 10 and Docker. `corepack pnpm` runs the pnpm that `packageManager` in
+`package.json` names, whatever `pnpm` is on the `PATH`; pnpm 9 cannot install this repo
+([Ponder patch](#ponder-patch)), and every `pnpm` command below needs pnpm 10 as well.
 
 ```sh
-pnpm install
+corepack pnpm install
 cp .env.example .env            # then fill it in
 pnpm db:up                      # Postgres 16 on 127.0.0.1:5434
 pnpm dev
@@ -308,6 +311,48 @@ That checkout must be on the pinned commit with a clean tree; the script refuses
 Only `event` entries are kept, since the indexer decodes logs and never calls contracts.
 Commit the pin and the regenerated files together.
 
+## Ponder patch
+
+`patches/ponder@0.17.10.patch` raises the floor of Ponder's request limiter, `MIN_RPS`, from 3
+to 15 (FAR-84). `pnpm install` applies it, from `pnpm.patchedDependencies` in `package.json`, to
+the file that runs (`dist/esm/rpc/index.js`) and to `src/rpc/index.ts`. Never edit
+`node_modules` by hand, on the VPS or anywhere else.
+
+**Why.** Ponder starts at 20 requests per second, multiplies that limit by 0.95 on every 429,
+down to `MIN_RPS`, and raises it only when each of the last ten seconds carried 90% of it. A
+second carries `floor(limit)` requests at most, so at 3.47 it lets 3 through, asks for 3.13 and
+never rises again; only from 10 up can a limit always rise. Live mode needs about 10 requests
+per second, one per block. On 29 Sep 2026 the production limit sat at 3.47 and the indexer was
+more than 5 hours behind, while the public RPC served 20 requests per second.
+
+**Why 15.** Above the 10 that live mode needs, below the 20 the public RPC was measured to
+serve. The limiter stays: a 429 still lowers the rate, so the IP of the VPS, which other
+processes use against the same RPC, does not get blocked.
+
+**Reading `rate_limit`.** Ponder logs the limit when a request has waited 15 seconds for a
+slot. With the patch it is never below 15. This is the stalled limit of 29 Sep 2026:
+
+```
+WARN  Unable to find available JSON-RPC provider within expected time action=fetch_missing_blocks chain=robinhood rate_limit=[3.4728750000000006] is_active=[true] is_warming_up=[false] (15s)
+```
+
+```sh
+pm2 logs farmenta-indexer --nostream --lines 100000 | grep -o 'rate_limit=\[[^]]*\]' | sort | uniq -c
+```
+
+**Upgrading Ponder means reviewing the patch.** It is written for 0.17.10: `pnpm install`
+refuses another version while the patch is registered (`ERR_PNPM_UNUSED_PATCH`),
+`test/ponderPatch.test.ts` fails when the installed floor is not 15, and
+`test/ponderLimiter.test.ts` runs the installed limiter against 429s. Read the limiter in the
+new `src/rpc/index.ts`, make the patch again with `pnpm patch ponder@<version>` and
+`pnpm patch-commit`, and keep its entry in `package.json`: pnpm 10.15 writes it to a new
+`pnpm-workspace.yaml`.
+
+**The patch makes pnpm 10 a requirement.** pnpm 10 writes the patch hash to the lockfile in a
+form pnpm 9 rejects, so `engines.pnpm` in `package.json` stops an older pnpm with a message
+that names the version. Install with `corepack pnpm install --frozen-lockfile`, and never with
+`--no-frozen-lockfile` on the server: that rewrites the lockfile.
+
 ## Deploy (VPS, pm2)
 
 The indexer runs on the lp-monitor-v2 VPS and shares its Postgres **server**, but not its
@@ -337,9 +382,12 @@ psql: error: ... FATAL:  permission denied for database "lpmon"
 
 ```sh
 git clone https://github.com/farmenta-defi/indexer.git && cd indexer
-pnpm install --frozen-lockfile
+corepack pnpm install --frozen-lockfile
 cp .env.example .env && chmod 600 .env
 ```
+
+`corepack pnpm`, not the `pnpm` on the `PATH`: on this VPS that one is 9.15.9, which cannot
+install this repo ([Ponder patch](#ponder-patch)).
 
 `chmod 600` because the file holds the database password and the RPC key. Fill it in: the
 paid `PONDER_RPC_URL`, `DATABASE_URL` for the `farmenta_indexer` role (shape in
@@ -363,10 +411,11 @@ Ponder logs the database as host, port and name, without credentials. It does pr
 RPC URL when a request fails, and most paid RPC URLs end in the API key: treat `pm2 logs`
 output as secret and strip the key before pasting it anywhere.
 
-**4. Update.** `git pull && pnpm install --frozen-lockfile && pm2 restart farmenta-indexer`.
+**4. Update.** `git pull && corepack pnpm install --frozen-lockfile && pm2 restart farmenta-indexer`.
 Ponder keeps its RPC cache in the `ponder_sync` schema, so a change to the schema or to the
 handlers re-runs indexing from cached logs rather than from the RPC. The Ponder version is
-pinned exactly in `package.json`; upgrade it deliberately, not as a side effect.
+pinned exactly in `package.json`, and the [Ponder patch](#ponder-patch) is written for that
+version; upgrade it deliberately, not as a side effect.
 
 Run exactly one instance per database schema.
 
