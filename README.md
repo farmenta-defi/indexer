@@ -311,28 +311,24 @@ Commit the pin and the regenerated files together.
 
 ## Ponder patch
 
-`patches/ponder@0.17.10.patch` changes one constant of Ponder's request limiter, `MIN_RPS`, from
-3 to 15 (FAR-84). `pnpm install` applies it, from `pnpm.patchedDependencies` in `package.json`,
-to the file that runs (`dist/esm/rpc/index.js`) and to the `src/rpc/index.ts` shipped next to
-it. Never edit `node_modules` by hand, on the VPS or anywhere else.
+`patches/ponder@0.17.10.patch` raises the floor of Ponder's request limiter, `MIN_RPS`, from 3
+to 15 (FAR-84). `pnpm install` applies it, from `pnpm.patchedDependencies` in `package.json`, to
+the file that runs (`dist/esm/rpc/index.js`) and to `src/rpc/index.ts`. Never edit
+`node_modules` by hand, on the VPS or anywhere else.
 
-**Why.** Ponder keeps a requests-per-second limit for each RPC URL. It starts at 20, every 429
-multiplies it by 0.95, down to `MIN_RPS`, and it is multiplied by 1.05 only when each of the last
-ten seconds carried at least 90% of it. A second carries `floor(limit)` requests at most, so a
-limit of 3.47 lets 3 through and asks for 3.13 before it rises: it never rises again. From 10
-up a limit can always rise; below 10 it depends on the fraction. This chain produces 9.9 blocks
-per second and live mode asks for every one of them, about 10 requests per second. On 29 Sep
-2026 the production limit sat at 3.47, the indexer advanced 2.4 blocks per second and was more
-than 5 hours behind, while the public RPC, measured directly, served 20 requests per second.
-Only a restart brought the limit back.
+**Why.** Ponder starts at 20 requests per second, multiplies that limit by 0.95 on every 429,
+down to `MIN_RPS`, and raises it only when each of the last ten seconds carried 90% of it. A
+second carries `floor(limit)` requests at most, so at 3.47 it lets 3 through, asks for 3.13 and
+never rises again; only from 10 up can a limit always rise. Live mode needs about 10 requests
+per second, one per block. On 29 Sep 2026 the production limit sat at 3.47 and the indexer was
+more than 5 hours behind, while the public RPC served 20 requests per second.
 
-**Why 15.** It is above the 10 that live mode needs and below the 20 the public RPC was measured
-to serve, and from there the limit climbs back on its own once the 429s stop. The limiter
-itself stays: a 429 still lowers the rate, so the IP of the VPS, which other processes use
-against the same RPC, does not get blocked.
+**Why 15.** Above the 10 that live mode needs, below the 20 the public RPC was measured to
+serve. The limiter stays: a 429 still lowers the rate, so the IP of the VPS, which other
+processes use against the same RPC, does not get blocked.
 
-**Reading the limit in the log.** Ponder prints it when a request has waited 15 seconds for a
-slot, one number per RPC URL. This is the stalled limit of 29 Sep 2026, 3 × 1.05³:
+**Reading `rate_limit`.** Ponder logs the limit when a request has waited 15 seconds for a
+slot. With the patch it is never below 15. This is the stalled limit of 29 Sep 2026:
 
 ```
 WARN  Unable to find available JSON-RPC provider within expected time action=fetch_missing_blocks chain=robinhood rate_limit=[3.4728750000000006] is_active=[true] is_warming_up=[false] (15s)
@@ -342,27 +338,12 @@ WARN  Unable to find available JSON-RPC provider within expected time action=fet
 pm2 logs farmenta-indexer --nostream --lines 100000 | grep -o 'rate_limit=\[[^]]*\]' | sort | uniq -c
 ```
 
-With the patch no `rate_limit` is below 15. If the indexer falls behind while it reads 15 or
-more, the limiter is not what holds it back: look at the RPC. Every single change of the limit
-is logged at debug level only (`PONDER_LOG_LEVEL=debug`), as `JSON-RPC provider rate limited`
-and `Increased JSON-RPC provider RPS limit`, with `rps_limit` rounded down.
-
-**Upgrading Ponder means reviewing the patch.** It is written for 0.17.10 and nothing else.
-`pnpm install` refuses any other Ponder version while the patch is registered
-(`ERR_PNPM_UNUSED_PATCH`), and `test/ponderPatch.test.ts` reads the installed
-`dist/esm/rpc/index.js` and fails when the floor is not 15, is below what live mode needs, or
-when another constant of the limiter has changed. To upgrade, read the limiter in the new
-`src/rpc/index.ts` first, then:
-
-```sh
-pnpm patch ponder@<version>       # prints a directory
-# there: set MIN_RPS in dist/esm/rpc/index.js and in src/rpc/index.ts
-pnpm patch-commit <directory>
-```
-
-pnpm 10.15 registers the new patch in a `pnpm-workspace.yaml`. Move that entry to
-`pnpm.patchedDependencies` in `package.json`, delete the file and the old patch, and run
-`pnpm install --frozen-lockfile` from an empty `node_modules` before `pnpm test`.
+**Upgrading Ponder means reviewing the patch.** It is written for 0.17.10: `pnpm install`
+refuses another version while the patch is registered (`ERR_PNPM_UNUSED_PATCH`), and
+`test/ponderPatch.test.ts` fails when the installed floor is not 15. Read the limiter in the
+new `src/rpc/index.ts`, make the patch again with `pnpm patch ponder@<version>` and
+`pnpm patch-commit`, and keep its entry in `package.json`: pnpm 10.15 writes it to a new
+`pnpm-workspace.yaml`.
 
 ## Deploy (VPS, pm2)
 
