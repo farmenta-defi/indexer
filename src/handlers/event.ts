@@ -2,7 +2,8 @@ import type { Context } from "ponder:registry";
 import type { Address, Hex } from "viem";
 
 // Most indexing functions take only the store. The two historical recovery handlers also
-// receive Ponder's event-scoped client, so their reads use the event block and sync cache.
+// receive Ponder's event-scoped client, which caches reads at the event block unless a read
+// uses an explicit immutable latest-state override.
 export type Db = Context["db"];
 
 // Only handlers that must recover history skipped by START_BLOCK_FLOOR receive this client.

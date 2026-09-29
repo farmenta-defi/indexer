@@ -52,39 +52,45 @@ export async function onCollateralDeposited(
   const owner = lower(event.args.owner);
   let minted = await db.find(position, { tokenId });
   if (!minted && client) {
-    const [key, info] = await client.readContract({
-      abi: positionManagerReadAbi,
-      address: UNISWAP.positionManager.address,
-      functionName: "getPoolAndPositionInfo",
-      args: [tokenId],
-    });
-    const liquidity = await client.readContract({
-      abi: positionManagerReadAbi,
-      address: UNISWAP.positionManager.address,
-      functionName: "getPositionLiquidity",
-      args: [tokenId],
-    });
-    const derivedPoolId = poolIdOf(key as PoolKey);
-    if (derivedPoolId !== poolId.toLowerCase()) {
-      throw new Error(`position ${tokenId} on ${market}: PositionManager key hashes to ${derivedPoolId}, not ${poolId}`);
+    try {
+      const [key, info] = await client.readContract({
+        abi: positionManagerReadAbi,
+        address: UNISWAP.positionManager.address,
+        functionName: "getPoolAndPositionInfo",
+        args: [tokenId],
+      });
+      if (info === 0n) throw new Error(`position ${tokenId} on ${market}: PositionManager returned empty position info`);
+      const liquidity = await client.readContract({
+        abi: positionManagerReadAbi,
+        address: UNISWAP.positionManager.address,
+        functionName: "getPositionLiquidity",
+        args: [tokenId],
+      });
+      const derivedPoolId = poolIdOf(key as PoolKey);
+      if (derivedPoolId !== poolId.toLowerCase()) {
+        throw new Error(`position ${tokenId} on ${market}: PositionManager key hashes to ${derivedPoolId}, not ${poolId}`);
+      }
+      const tickLower = signedInt24((info >> 8n) & 0xffffffn);
+      const tickUpper = signedInt24((info >> 32n) & 0xffffffn);
+      minted = {
+        tokenId,
+        owner: market,
+        poolId: derivedPoolId,
+        tickLower,
+        tickUpper,
+        liquidity,
+        burned: false,
+        // Mint metadata is unknowable because its event predates the configured start block.
+        mintedBlock: null,
+        mintedAt: null,
+        recoveredBlock: event.block.number,
+        updatedAt: event.block.timestamp,
+      };
+      await db.insert(position).values(minted);
+    } catch (error) {
+      if (!isHistoricalStateUnavailable(error)) throw error;
+      console.warn(`Historical position state unavailable for tokenId ${tokenId} at block ${event.block.number}; keeping loan without position row`);
     }
-    if (info === 0n) throw new Error(`position ${tokenId} on ${market}: PositionManager returned empty position info`);
-    const tickLower = signedInt24((info >> 8n) & 0xffffffn);
-    const tickUpper = signedInt24((info >> 32n) & 0xffffffn);
-    minted = {
-      tokenId,
-      owner: market,
-      poolId: derivedPoolId,
-      tickLower,
-      tickUpper,
-      liquidity,
-      burned: false,
-      // Mint metadata is unknowable because its event predates the configured start block.
-      mintedBlock: null,
-      mintedAt: null,
-      updatedAt: event.block.timestamp,
-    };
-    await db.insert(position).values(minted);
   }
   if (minted && minted.poolId !== null && minted.poolId !== poolId) {
     throw new Error(`position ${tokenId} on ${market}: event names pool ${poolId}, the position row ${minted.poolId}`);
@@ -106,6 +112,21 @@ export async function onCollateralDeposited(
   // A conflict is a redeposit: the earlier loan was deleted on chain, so the row starts over.
   await db.insert(loan).values({ market, tokenId, ...row }).onConflictDoUpdate(row);
   await db.insert(loanActivity).values(activity(event, owner, "deposit"));
+}
+
+function isHistoricalStateUnavailable(error: unknown): boolean {
+  const messages: string[] = [];
+  const visited = new Set<object>();
+  let current: unknown = error;
+  while (current && typeof current === "object" && !visited.has(current)) {
+    visited.add(current);
+    const value = current as { message?: unknown; shortMessage?: unknown; details?: unknown; cause?: unknown };
+    for (const field of [value.message, value.shortMessage, value.details]) {
+      if (typeof field === "string") messages.push(field);
+    }
+    current = value.cause;
+  }
+  return /historical state.{0,100}not available/i.test(messages.join(" "));
 }
 
 function signedInt24(value: bigint): number {

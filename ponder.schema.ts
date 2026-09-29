@@ -24,7 +24,7 @@ export const pool = onchainTable(
   (t) => ({
     id: t.hex().primaryKey(),
     // Null until `Initialize` is seen or PoolListed recovers the key; `list` does not require
-    // the pool to exist yet, and an empty key means the pool is not initialized.
+    // a PositionManager key to exist yet, and an empty key means no position was minted there.
     currency0: t.hex(),
     currency1: t.hex(),
     fee: t.integer(),
@@ -169,6 +169,8 @@ export const position = onchainTable(
     // Null when a position is first discovered from a deposit after its mint was skipped.
     mintedBlock: t.bigint(),
     mintedAt: t.bigint(),
+    // State was read at the end of this block, so ModifyLiquidity from the block is included.
+    recoveredBlock: t.bigint(),
     updatedAt: t.bigint().notNull(),
   }),
   (table) => ({

@@ -45,7 +45,9 @@ export async function onPoolListed(
       address: UNISWAP.positionManager.address,
       functionName: "poolKeys",
       args: [poolKeyId],
+      cache: "immutable",
     });
+    // The pool can be initialized and traded without having a PositionManager key yet.
     if (readKey.tickSpacing !== 0) {
       if (poolIdOf(readKey as PoolKey) !== poolId.toLowerCase()) {
         throw new Error(`PoolListed ${poolId}: PositionManager PoolKey hashes to ${poolIdOf(readKey as PoolKey)}`);

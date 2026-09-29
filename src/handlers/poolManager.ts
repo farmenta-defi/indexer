@@ -59,9 +59,11 @@ export async function onModifyLiquidity(db: Db, event: ModifyLiquidity) {
 
   const tokenId = BigInt(salt);
   // The mint's `Transfer` comes first in the same transaction. No row means START_BLOCK_FLOOR
-  // skipped it (local development only); see `onTransfer`.
+  // skipped it; a later collateral deposit may recover the position.
   const row = await db.find(position, { tokenId });
   if (!row) return;
+  // A recovered row contains end-of-block liquidity; same-block deltas are already included.
+  if (row.recoveredBlock === event.block.number) return;
 
   // A position never changes pool or range. A mismatch means the salt is not the tokenId
   // after all, and every row written from here would be wrong.

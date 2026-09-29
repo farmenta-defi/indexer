@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { zeroAddress, type Address, type Hex } from "viem";
 
+import { UNISWAP } from "../config/uniswap.ts";
 import * as schema from "../ponder.schema.ts";
 import { createApp } from "../src/api/app.ts";
 import { onPoolListed } from "../src/handlers/collateralPolicy.ts";
@@ -28,12 +29,14 @@ const terms = {
 };
 
 function reader(responses: unknown[]) {
-  const calls: { functionName: string; args: readonly unknown[] }[] = [];
+  const calls: { address: Address; functionName: string; args: readonly unknown[]; blockNumber?: bigint; cache?: string }[] = [];
   return {
     calls,
-    readContract: async (input: { functionName: string; args: readonly unknown[] }) => {
+    readContract: async (input: (typeof calls)[number]) => {
       calls.push(input);
-      return responses.shift();
+      const response = responses.shift();
+      if (response instanceof Error) throw response;
+      return response;
     },
   };
 }
@@ -53,6 +56,9 @@ describe("chain reads for history skipped by START_BLOCK_FLOOR", () => {
           key,
         );
         assert.deepEqual(client.calls[0]?.args, [`0x${poolId.slice(2, 52)}`]);
+        assert.equal(client.calls[0]?.address, UNISWAP.positionManager.address);
+        assert.equal(client.calls[0]?.cache, "immutable");
+        assert.equal(client.calls[0]?.blockNumber, undefined);
         assert.deepEqual(rows(schema.uniswapPool), []);
       });
 
@@ -108,29 +114,64 @@ describe("chain reads for history skipped by START_BLOCK_FLOOR", () => {
           (BigInt(poolId) & (((1n << 200n) - 1n) << 56n)) |
           (120n << 32n) |
           (BigInt.asUintN(24, -120n) << 8n);
+        const depositor = "0x00000000000000000000000000000000000000ab" as Address;
+        const deposit = chain()({ tokenId, owner: depositor, poolId }, MARKET);
         const client = reader([[key, packedInfo], 9_000n]);
-        await onCollateralDeposited(db, chain()({ tokenId, owner: MARKET, poolId }, MARKET), client as never);
+        await onCollateralDeposited(db, deposit, client as never);
         assert.deepEqual(client.calls.map((call) => call.functionName), ["getPoolAndPositionInfo", "getPositionLiquidity"]);
+        assert.ok(client.calls.every((call) => call.address === UNISWAP.positionManager.address));
+        assert.ok(client.calls.every((call) => call.blockNumber === undefined));
         assert.equal(rows(schema.position)[0]?.poolId, poolId);
+        assert.equal(rows(schema.position)[0]?.owner, MARKET);
+        assert.equal(rows(schema.loan)[0]?.owner, depositor);
         assert.equal(rows(schema.position)[0]?.tickLower, -120);
         assert.equal(rows(schema.position)[0]?.tickUpper, 120);
         assert.equal(rows(schema.position)[0]?.liquidity, 9_000n);
         assert.equal(rows(schema.position)[0]?.mintedBlock, null);
         assert.equal(rows(schema.position)[0]?.mintedAt, null);
+        assert.equal(rows(schema.position)[0]?.recoveredBlock, deposit.block.number);
 
         const sender = MANAGER;
         await onModifyLiquidity(
           db,
-          chain()({
-            id: poolId,
-            sender,
-            tickLower: -120,
-            tickUpper: 120,
-            liquidityDelta: 300n,
-            salt: `0x${tokenId.toString(16).padStart(64, "0")}` as Hex,
-          }),
+          {
+            ...deposit,
+            args: {
+              id: poolId,
+              sender,
+              tickLower: -120,
+              tickUpper: 120,
+              liquidityDelta: 300n,
+              salt: `0x${tokenId.toString(16).padStart(64, "0")}` as Hex,
+            },
+          },
+        );
+        assert.equal(rows(schema.position)[0]?.liquidity, 9_000n);
+        await onModifyLiquidity(
+          db,
+          {
+            ...chain()({
+              id: poolId,
+              sender,
+              tickLower: -120,
+              tickUpper: 120,
+              liquidityDelta: 300n,
+              salt: `0x${tokenId.toString(16).padStart(64, "0")}` as Hex,
+            }),
+            block: { number: deposit.block.number + 1n, timestamp: deposit.block.timestamp + 1n },
+          },
         );
         assert.equal(rows(schema.position)[0]?.liquidity, 9_300n);
+      });
+
+      it("rejects empty position info when the PoolKey matches", async () => {
+        const { db } = fakeDb();
+        const client = reader([[key, 0n]]);
+        await assert.rejects(
+          onCollateralDeposited(db, chain()({ tokenId: 45n, owner: MARKET, poolId }, MARKET), client as never),
+          /empty position info/,
+        );
+        assert.equal(client.calls.length, 1);
       });
     });
 
@@ -139,7 +180,7 @@ describe("chain reads for history skipped by START_BLOCK_FLOOR", () => {
         const { db } = fakeDb();
         const tokenId = 44n;
         const otherPoolId = poolIdOf({ ...key, fee: 500 });
-        const client = reader([[key, 0n], 1n]);
+        const client = reader([[key, 1n], 1n]);
         await assert.rejects(
           onCollateralDeposited(db, chain()({ tokenId, owner: MARKET, poolId: otherPoolId }, MARKET), client as never),
           /not/,
@@ -148,6 +189,33 @@ describe("chain reads for history skipped by START_BLOCK_FLOOR", () => {
     });
 
     describe("edge case", () => {
+      it("keeps the loan and continues when the deposit block is outside RPC history", async () => {
+        const { db, rows } = fakeDb();
+        const tokenId = 46n;
+        const client = reader([new Error("historical state 0xad46 is not available")]);
+        const warn = console.warn;
+        const warnings: string[] = [];
+        console.warn = (...values: unknown[]) => warnings.push(values.join(" "));
+        try {
+          await onCollateralDeposited(db, chain()({ tokenId, owner: MARKET, poolId }, MARKET), client as never);
+        } finally {
+          console.warn = warn;
+        }
+        assert.equal(warnings.length, 1);
+        assert.equal(rows(schema.position).length, 0);
+        assert.equal(rows(schema.loan).length, 1);
+        assert.match(warnings[0] ?? "", /tokenId 46 at block 101/);
+      });
+
+      it("propagates position read failures other than unavailable historical state", async () => {
+        const { db } = fakeDb();
+        const client = reader([new Error("execution reverted")]);
+        await assert.rejects(
+          onCollateralDeposited(db, chain()({ tokenId: 47n, owner: MARKET, poolId }, MARKET), client as never),
+          /execution reverted/,
+        );
+      });
+
       it("does not reread a known position", async () => {
         const { db } = fakeDb();
         const tokenId = 43n;
