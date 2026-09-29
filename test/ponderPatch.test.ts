@@ -8,8 +8,8 @@ import { descent, readRateLimit, stallAbove } from "./support/ponderRateLimit.ts
 // `pnpm install` put in node_modules, so a patch lost in an upgrade fails here and not in
 // production, hours later, as an indexer that falls behind.
 
-// What following the chain takes: it produces 9.9 blocks per second (spec §13, v2.10) and live
-// mode asks for each of them with one eth_getBlockByNumber.
+// What following the chain takes: it produces 9.9 blocks per second (spec, Riwayat v2.10) and
+// live mode asks for each of them with one eth_getBlockByNumber.
 const LIVE_MODE_RPS = 10;
 // The floor FAR-84 chose.
 const FLOOR_RPS = 15;
