@@ -24,8 +24,9 @@ function requireEnv(name: string): string {
 // into a backfill that never finishes.
 const rpc = requireEnv("PONDER_RPC_URL");
 
-// Local development only: lifts every startBlock to at least this block, so `pnpm dev` does
-// not backfill the chain from block 9,070. Production leaves it unset.
+// The production floor is the first Farmenta deployment block (FAR-82). It keeps public-RPC
+// backfill tractable; missing historical pool keys and deposited positions are recovered by
+// their event handlers.
 const startBlockFloor = Number(process.env.START_BLOCK_FLOOR || 0);
 const from = (startBlock: number) => Math.max(startBlock, startBlockFloor);
 
