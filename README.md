@@ -36,10 +36,12 @@ replays every `eth_call` (spec §13). HF belongs to the backend and the keeper.
 
 ## Local setup
 
-Needs Node ≥ 22, pnpm and Docker.
+Needs Node ≥ 22, pnpm 10 and Docker. `corepack pnpm` runs the pnpm that `packageManager` in
+`package.json` names, whatever `pnpm` is on the `PATH`; pnpm 9 cannot install this repo
+([Ponder patch](#ponder-patch)), and every `pnpm` command below needs pnpm 10 as well.
 
 ```sh
-pnpm install
+corepack pnpm install
 cp .env.example .env            # then fill it in
 pnpm db:up                      # Postgres 16 on 127.0.0.1:5434
 pnpm dev
@@ -345,6 +347,11 @@ new `src/rpc/index.ts`, make the patch again with `pnpm patch ponder@<version>` 
 `pnpm patch-commit`, and keep its entry in `package.json`: pnpm 10.15 writes it to a new
 `pnpm-workspace.yaml`.
 
+**The patch makes pnpm 10 a requirement.** pnpm 10 writes the patch hash to the lockfile in a
+form pnpm 9 rejects, so `engines.pnpm` in `package.json` stops an older pnpm with a message
+that names the version. Install with `corepack pnpm install --frozen-lockfile`, and never with
+`--no-frozen-lockfile` on the server: that rewrites the lockfile.
+
 ## Deploy (VPS, pm2)
 
 The indexer runs on the lp-monitor-v2 VPS and shares its Postgres **server**, but not its
@@ -374,9 +381,12 @@ psql: error: ... FATAL:  permission denied for database "lpmon"
 
 ```sh
 git clone https://github.com/farmenta-defi/indexer.git && cd indexer
-pnpm install --frozen-lockfile
+corepack pnpm install --frozen-lockfile
 cp .env.example .env && chmod 600 .env
 ```
+
+`corepack pnpm`, not the `pnpm` on the `PATH`: on this VPS that one is 9.15.9, which cannot
+install this repo ([Ponder patch](#ponder-patch)).
 
 `chmod 600` because the file holds the database password and the RPC key. Fill it in: the
 paid `PONDER_RPC_URL`, `DATABASE_URL` for the `farmenta_indexer` role (shape in
@@ -400,7 +410,7 @@ Ponder logs the database as host, port and name, without credentials. It does pr
 RPC URL when a request fails, and most paid RPC URLs end in the API key: treat `pm2 logs`
 output as secret and strip the key before pasting it anywhere.
 
-**4. Update.** `git pull && pnpm install --frozen-lockfile && pm2 restart farmenta-indexer`.
+**4. Update.** `git pull && corepack pnpm install --frozen-lockfile && pm2 restart farmenta-indexer`.
 Ponder keeps its RPC cache in the `ponder_sync` schema, so a change to the schema or to the
 handlers re-runs indexing from cached logs rather than from the RPC. The Ponder version is
 pinned exactly in `package.json`, and the [Ponder patch](#ponder-patch) is written for that
