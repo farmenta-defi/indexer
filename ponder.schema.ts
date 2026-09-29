@@ -167,8 +167,9 @@ export const position = onchainTable(
     // Sum of every `liquidityDelta`: what `getPositionLiquidity` returns.
     liquidity: t.bigint().notNull(),
     burned: t.boolean().notNull(),
-    mintedBlock: t.bigint().notNull(),
-    mintedAt: t.bigint().notNull(),
+    // Null when a position is first discovered from a deposit after its mint was skipped.
+    mintedBlock: t.bigint(),
+    mintedAt: t.bigint(),
     updatedAt: t.bigint().notNull(),
   }),
   (table) => ({

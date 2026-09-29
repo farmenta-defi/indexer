@@ -1,8 +1,11 @@
 import type { Address, Hex } from "viem";
 
+import { UNISWAP } from "../../config/uniswap.ts";
 import { badDebtSocialized, liquidation, loan, loanActivity, position } from "../../ponder.schema.ts";
 import { LOAN_STATUS } from "../lib/loan.ts";
-import { lower, marketLogKey, type Db, type Log } from "./event.ts";
+import { poolIdOf, type PoolKey } from "../lib/poolKey.ts";
+import { positionManagerReadAbi } from "../lib/positionManagerAbi.ts";
+import { lower, marketLogKey, type ChainClient, type Db, type Log } from "./event.ts";
 import { noStaleBurn, releaseBurn } from "./pendingBurn.ts";
 
 // Both markets emit these; `event.log.address` says which one (ponder.config.ts).
@@ -38,12 +41,51 @@ function samePool(held: { poolId: Hex }, event: Log<{ tokenId: bigint; poolId: H
 // `safeTransferFrom` push alike, always after the NFT reached the market. The loan's pool
 // is the one the event names (spec §4.1, FAR-42). `position` only confirms it, where the
 // mint was seen: a mismatch means the salt-to-tokenId join is wrong.
-export async function onCollateralDeposited(db: Db, event: Log<{ tokenId: bigint; owner: Address; poolId: Hex }>) {
+export async function onCollateralDeposited(
+  db: Db,
+  event: Log<{ tokenId: bigint; owner: Address; poolId: Hex }>,
+  client?: ChainClient,
+) {
   await noStaleBurn(db, event);
   const market = lower(event.log.address);
   const { tokenId, poolId } = event.args;
   const owner = lower(event.args.owner);
-  const minted = await db.find(position, { tokenId });
+  let minted = await db.find(position, { tokenId });
+  if (!minted && client) {
+    const [key, info] = await client.readContract({
+      abi: positionManagerReadAbi,
+      address: UNISWAP.positionManager.address,
+      functionName: "getPoolAndPositionInfo",
+      args: [tokenId],
+    });
+    const liquidity = await client.readContract({
+      abi: positionManagerReadAbi,
+      address: UNISWAP.positionManager.address,
+      functionName: "getPositionLiquidity",
+      args: [tokenId],
+    });
+    const derivedPoolId = poolIdOf(key as PoolKey);
+    if (derivedPoolId !== poolId.toLowerCase()) {
+      throw new Error(`position ${tokenId} on ${market}: PositionManager key hashes to ${derivedPoolId}, not ${poolId}`);
+    }
+    if (info === 0n) throw new Error(`position ${tokenId} on ${market}: PositionManager returned empty position info`);
+    const tickLower = signedInt24((info >> 8n) & 0xffffffn);
+    const tickUpper = signedInt24((info >> 32n) & 0xffffffn);
+    minted = {
+      tokenId,
+      owner: market,
+      poolId: derivedPoolId,
+      tickLower,
+      tickUpper,
+      liquidity,
+      burned: false,
+      // Mint metadata is unknowable because its event predates the configured start block.
+      mintedBlock: null,
+      mintedAt: null,
+      updatedAt: event.block.timestamp,
+    };
+    await db.insert(position).values(minted);
+  }
   if (minted && minted.poolId !== null && minted.poolId !== poolId) {
     throw new Error(`position ${tokenId} on ${market}: event names pool ${poolId}, the position row ${minted.poolId}`);
   }
@@ -64,6 +106,10 @@ export async function onCollateralDeposited(db: Db, event: Log<{ tokenId: bigint
   // A conflict is a redeposit: the earlier loan was deleted on chain, so the row starts over.
   await db.insert(loan).values({ market, tokenId, ...row }).onConflictDoUpdate(row);
   await db.insert(loanActivity).values(activity(event, owner, "deposit"));
+}
+
+function signedInt24(value: bigint): number {
+  return Number(value >= 0x800000n ? value - 0x1000000n : value);
 }
 
 export async function onCollateralWithdrawn(db: Db, event: Log<{ tokenId: bigint; owner: Address; poolId: Hex }>) {

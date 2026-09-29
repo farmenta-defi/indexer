@@ -1,7 +1,11 @@
 import type { Address, Hex } from "viem";
 
+import { UNISWAP } from "../../config/uniswap.ts";
 import { hook, ltRamp, pool, poolTermsChange, token, uniswapPool } from "../../ponder.schema.ts";
-import type { Db, Log } from "./event.ts";
+import { poolIdOf } from "../lib/poolKey.ts";
+import { positionManagerReadAbi } from "../lib/positionManagerAbi.ts";
+import type { ChainClient, Db, Log } from "./event.ts";
+import type { PoolKey } from "../lib/poolKey.ts";
 
 type ListingParams = {
   maxLtvBps: number;
@@ -20,9 +24,35 @@ const logKey = (poolId: Hex, event: Log<unknown>) => ({
   transactionHash: event.transaction.hash,
 });
 
-export async function onPoolListed(db: Db, event: Log<{ poolId: Hex; tier: number; params: ListingParams }>) {
+export async function onPoolListed(
+  db: Db,
+  event: Log<{ poolId: Hex; tier: number; params: ListingParams }>,
+  client?: ChainClient,
+) {
   const { poolId, tier, params } = event.args;
-  const key = await db.find(uniswapPool, { id: poolId });
+  const storedKey = await db.find(uniswapPool, { id: poolId });
+  let key = storedKey && {
+    currency0: storedKey.currency0,
+    currency1: storedKey.currency1,
+    fee: storedKey.fee,
+    tickSpacing: storedKey.tickSpacing,
+    hooks: storedKey.hooks,
+  };
+  if (!key && client) {
+    const poolKeyId = `0x${poolId.slice(2, 52)}` as Hex;
+    const readKey = await client.readContract({
+      abi: positionManagerReadAbi,
+      address: UNISWAP.positionManager.address,
+      functionName: "poolKeys",
+      args: [poolKeyId],
+    });
+    if (readKey.tickSpacing !== 0) {
+      if (poolIdOf(readKey as PoolKey) !== poolId.toLowerCase()) {
+        throw new Error(`PoolListed ${poolId}: PositionManager PoolKey hashes to ${poolIdOf(readKey as PoolKey)}`);
+      }
+      key = readKey;
+    }
+  }
 
   // A pool can be listed once (`PoolAlreadyListed`), so this never overwrites a row.
   await db.insert(pool).values({

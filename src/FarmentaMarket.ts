@@ -12,7 +12,7 @@ import {
 } from "./handlers/farmentaMarket.ts";
 import { onDeposit, onShareTransfer, onWithdraw } from "./handlers/vault.ts";
 
-ponder.on("FarmentaMarket:CollateralDeposited", ({ event, context }) => onCollateralDeposited(context.db, event));
+ponder.on("FarmentaMarket:CollateralDeposited", ({ event, context }) => onCollateralDeposited(context.db, event, context.client));
 ponder.on("FarmentaMarket:CollateralWithdrawn", ({ event, context }) => onCollateralWithdrawn(context.db, event));
 ponder.on("FarmentaMarket:Borrow", ({ event, context }) => onBorrow(context.db, event));
 ponder.on("FarmentaMarket:Repay", ({ event, context }) => onRepay(context.db, event));

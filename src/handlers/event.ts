@@ -1,10 +1,12 @@
 import type { Context } from "ponder:registry";
 import type { Address, Hex } from "viem";
 
-// The slice of Ponder's handler arguments the indexing functions use. They take the store
-// and nothing else from the context, so none of them can reach `context.client`: every
-// table is rebuilt from events alone, with no `eth_call` (FAR-34).
+// Most indexing functions take only the store. The two historical recovery handlers also
+// receive Ponder's event-scoped client, so their reads use the event block and sync cache.
 export type Db = Context["db"];
+
+// Only handlers that must recover history skipped by START_BLOCK_FLOOR receive this client.
+export type ChainClient = Context["client"];
 
 export type Log<Args> = {
   args: Args;
