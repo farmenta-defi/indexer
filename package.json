@@ -13,6 +13,7 @@
     "dev": "node --env-file-if-exists=.env node_modules/ponder/dist/esm/bin/ponder.js dev --schema ponder",
     "start": "node --env-file-if-exists=.env node_modules/ponder/dist/esm/bin/ponder.js start --schema ponder",
     "codegen": "node --env-file-if-exists=.env node_modules/ponder/dist/esm/bin/ponder.js codegen",
+    "lint": "oxlint --type-aware src/ test/",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/**/*.test.ts\"",
     "abi:sync": "node scripts/sync-abis.mjs",
@@ -26,6 +27,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "oxlint": "^1.58.0",
+    "oxlint-tsgolint": "^7.0.2001",
     "typescript": "^5.9.0"
   },
   "pnpm": {

@@ -49,7 +49,7 @@ pnpm db:up                      # Postgres 16 on 127.0.0.1:5434
 pnpm dev
 ```
 
-`pnpm typecheck` and `pnpm test` need neither a database nor an RPC.
+`pnpm lint`, `pnpm typecheck` and `pnpm test` need neither a database nor an RPC.
 
 `.env` is gitignored, and `.env.example` is the only env file in the repo. Node loads `.env`
 itself (`--env-file`, in the package scripts and the pm2 file) before Ponder starts, which
