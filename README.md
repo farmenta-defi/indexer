@@ -106,19 +106,21 @@ block (Arbitrum Orbit, spec §14), so nothing here derives time from block numbe
 
 ## Tables
 
-Every table is written from events alone, with no `eth_call`, so a reindex from zero rebuilds
-identical rows.
+Most tables are written from events alone. `PoolListed` and `CollateralDeposited` also make
+event-block `eth_call`s to recover pool keys and positions whose source events predate the
+configured start block. Those reads are cached in Ponder's sync store, so a reindex with the
+same start block rebuilds the same rows.
 
 | Table | Written by | Holds |
 |---|---|---|
-| `uniswap_pool` | PoolManager `Initialize` | PoolKey of every pool on the chain, listed or not |
-| `pool` | CollateralPolicy `PoolListed`, `PoolTermsUpdated`, `PoolFrozen`, `LtRampScheduled` | Listed pools only: key, tier, terms in force, `frozen`, current ramp. `id` is the frontend's `marketId` |
+| `uniswap_pool` | PoolManager `Initialize` | PoolKeys initialized within the indexed block range, listed or not |
+| `pool` | CollateralPolicy events; reads PoolKey on `PoolListed` if its `Initialize` predates the range | Listed pools only: key, tier, terms in force, `frozen`, current ramp. `id` is the frontend's `marketId` |
 | `pool_terms_change` | `PoolListed`, `PoolTermsUpdated` | Every set of terms a pool has had |
 | `lt_ramp` | `LtRampScheduled` | Every ramp ever scheduled |
 | `token`, `hook` | `TokenConfigured`, `HookAllowlisted` | Latest config per currency and per hook (owner console, FAR-41) |
 | `twap_observation` | TwapRecorder `Recorded` | One row per observation, keyed by pool and timestamp |
 | `twap_pool` | `Recorded` | Newest observation per pool: `last_observation_at` |
-| `position` | PositionManager `Transfer`, PoolManager `ModifyLiquidity` | Every position NFT on the chain: holder, pool, ticks, liquidity, `burned` |
+| `position` | PositionManager `Transfer`, PoolManager `ModifyLiquidity`; reads position state on `CollateralDeposited` if its mint predates the range | Observed positions and older positions deposited as collateral: holder, pool, ticks, liquidity, `burned` |
 | `position_transfer` | PositionManager `Transfer` | Every transfer, mint and burn included |
 | `loan` | FarmentaMarket `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `Liquidate` | One row per market and tokenId: depositor, pool, `status`, `everBorrowed`, running totals |
 | `loan_activity` | `CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`, `LiquidityChanged`, `CollectFees` | The borrower side of the transaction history |
@@ -129,10 +131,10 @@ identical rows.
 | `vault_balance` | share `Transfer` | Shares per market and holder: what `balanceOf` returns |
 
 `PoolListed` does not carry the PoolKey, which exists only in `Initialize`, often emitted long
-before Farmenta was deployed. That is why `Initialize` is indexed from the PoolManager's deploy
-block, and why `uniswap_pool` exists at all. The key columns of `pool` are null only while
-`Initialize` has not been seen: `list` does not require the pool to exist, and
-`START_BLOCK_FLOOR` can skip the event locally. They are filled in when it arrives.
+before Farmenta was deployed. `uniswap_pool` records `Initialize` events within the configured
+range. If a listed pool's `Initialize` predates that range, the `PoolListed` handler reads its
+PoolKey at the event block and writes the key directly to `pool`. Key columns remain null only
+if the contract returns an empty key (the pool is not initialized).
 
 A pool's first observation has `index 0` and `tickCumulative 0`. That is the recorder
 initializing the pool, not broken data. `record` is permissionless, so `twap_pool` may hold
@@ -143,19 +145,20 @@ The effective LT is **not** a column: during a ramp it depends on the time it is
 
 ### Positions
 
-`PositionManager` has no `ERC721Enumerable` (spec §12), and a position that becomes collateral
-was usually minted long before Farmenta existed, so **every** position NFT is indexed, from
-the PositionManager's deploy block. The PositionManager always calls `modifyLiquidity` with
-`salt = bytes32(tokenId)`, so `ModifyLiquidity` alone gives a tokenId its pool, ticks and
-liquidity, with no `eth_call`; `ponder.config.ts` filters that event on
-`sender = PositionManager`. `test/realPositions.test.ts` replays the real logs of two fixture
-positions and gets the figures the contracts' fork tests read from `getPoolAndPositionInfo`
-and `getPositionLiquidity`.
+`PositionManager` has no `ERC721Enumerable` (spec §12). Within the indexed range, the
+PositionManager's `Transfer` and PoolManager's `ModifyLiquidity` events provide position
+history. A position first deposited as collateral after the range starts may have been minted
+earlier, so `CollateralDeposited` reads its pool, ticks and liquidity at that event's block and
+creates the missing row. An older position never deposited as collateral remains unknown.
+`ponder.config.ts` filters `ModifyLiquidity` on `sender = PositionManager`.
+`test/realPositions.test.ts` replays the real logs of two fixture positions and gets the figures
+the contracts' fork tests read from `getPoolAndPositionInfo` and `getPositionLiquidity`.
 
 `position.owner` is whoever holds the NFT: **the market** while the position is collateral
 (the depositor is `loan.owner`), the zero address once burned. A burned row stays, with
-`liquidity` 0. With `START_BLOCK_FLOOR` set, a position minted before the floor is not
-indexed at all, because its liquidity could not be right.
+`liquidity` 0. With `START_BLOCK_FLOOR` set, an older position is only indexed if it is
+deposited as collateral after the floor; positions never deposited after the floor remain
+unknown.
 
 ### Loans
 

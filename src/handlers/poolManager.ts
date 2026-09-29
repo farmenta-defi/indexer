@@ -14,8 +14,9 @@ type Initialize = Log<{
   hooks: Address;
 }>;
 
-// `PoolListed` does not carry the PoolKey, so every `Initialize` since the PoolManager's
-// deploy block is kept, and a listing joins it by id (collateralPolicy.ts).
+// `PoolListed` does not carry the PoolKey, so `Initialize` events in the indexed range are
+// kept and a listing joins by id (collateralPolicy.ts). FAR-82 recovers keys for earlier
+// listed pools directly in the listing handler.
 export async function onInitialize(db: Db, event: Initialize) {
   const { id, currency0, currency1, fee, tickSpacing, hooks } = event.args;
   const key = { currency0, currency1, fee, tickSpacing, hooks };

@@ -1,12 +1,11 @@
 import { index, onchainTable, primaryKey } from "ponder";
 
-// Every table is written from events alone, never from an `eth_call`, so a reindex from
-// zero rebuilds the same rows (FAR-34, FAR-35).
+// Most rows are event-derived. PoolListed and CollateralDeposited also recover state omitted
+// by the configured start block with event-scoped eth_calls (FAR-82).
 
-// Every pool ever initialized on the PoolManager, listed by Farmenta or not. It exists only
-// because `PoolListed` does not carry the PoolKey: currencies, fee, tick spacing and hooks
-// are in `Initialize` alone, often emitted long before Farmenta was deployed. If `PoolListed`
-// ever carries the key (market-id R5, undecided), this table can go.
+// Pools initialized within the indexed range, listed by Farmenta or not. It exists because
+// `PoolListed` does not carry the PoolKey: currencies, fee, tick spacing and hooks are in
+// `Initialize` alone. For older listed pools FAR-82 reads the key into `pool` directly.
 export const uniswapPool = onchainTable("uniswap_pool", (t) => ({
   id: t.hex().primaryKey(),
   currency0: t.hex().notNull(),
@@ -24,8 +23,8 @@ export const pool = onchainTable(
   "pool",
   (t) => ({
     id: t.hex().primaryKey(),
-    // Null only while `Initialize` has not been seen: `list` does not require the pool to
-    // exist yet, and START_BLOCK_FLOOR can skip the event in local development.
+    // Null until `Initialize` is seen or PoolListed recovers the key; `list` does not require
+    // the pool to exist yet, and an empty key means the pool is not initialized.
     currency0: t.hex(),
     currency1: t.hex(),
     fee: t.integer(),
