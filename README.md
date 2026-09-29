@@ -341,8 +341,9 @@ pm2 logs farmenta-indexer --nostream --lines 100000 | grep -o 'rate_limit=\[[^]]
 ```
 
 **Upgrading Ponder means reviewing the patch.** It is written for 0.17.10: `pnpm install`
-refuses another version while the patch is registered (`ERR_PNPM_UNUSED_PATCH`), and
-`test/ponderPatch.test.ts` fails when the installed floor is not 15. Read the limiter in the
+refuses another version while the patch is registered (`ERR_PNPM_UNUSED_PATCH`),
+`test/ponderPatch.test.ts` fails when the installed floor is not 15, and
+`test/ponderLimiter.test.ts` runs the installed limiter against 429s. Read the limiter in the
 new `src/rpc/index.ts`, make the patch again with `pnpm patch ponder@<version>` and
 `pnpm patch-commit`, and keep its entry in `package.json`: pnpm 10.15 writes it to a new
 `pnpm-workspace.yaml`.
