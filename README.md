@@ -65,13 +65,14 @@ until `POSTGRES_PASSWORD` is set in `.env`.
 lp-monitor-v2 URL fails at startup instead of writing into `lpmon`.
 
 **RPC.** `PONDER_RPC_URL` is required and has no fallback. Production follows the chain on the
-public RPC (spec v2.07). `START_BLOCK_FLOOR=74901824` is the first Farmenta deployment block;
+public RPC (spec v2.07). `START_BLOCK_FLOOR=77197166` is the first block of the Farmenta
+deployment of 1 Oct 2026 (spec §18.2; the deployment it replaced started at 74,901,824);
 the floor was chosen because starting Uniswap history at block 9,070 was estimated to take
 about 60 days. Since FAR-84, the public RPC follows the chain at a measured 1.06 requests per
 block; the floor keeps the initial backfill tractable. Locally, leave the floor unset for full
 history or set it to a recent block to test current events.
 
-The floor skips Uniswap events before block 74,901,824. In particular, the listed ETH/USDG
+The floor skips Uniswap events before block 77,197,166. In particular, the listed ETH/USDG
 pool `0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551` was initialized at
 block 41,259,014. When `PoolListed` finds no `uniswap_pool` row, it reads
 `PositionManager.poolKeys(bytes25(poolId))` at `latest`, checks that the key hashes to the
@@ -93,10 +94,11 @@ keeper. Existing backend `/pools/{poolId}` and keeper `pools()` responses then r
 same five populated key columns from `pool` without code changes.
 
 Events before the floor are still outside the backfill: loans deposited before block
-74,901,824 have no `loan` row, so a later loan event that requires custody state cannot be
+77,197,166 have no `loan` row, so a later loan event that requires custody state cannot be
 reconstructed; vault transfers whose initial share mint was skipped likewise lack its earlier
-balance history. The production deployment was started at the first Farmenta deployment block,
-and these remain the consequences if that floor is raised further.
+balance history. The production deployment was started at the first block of the Farmenta
+deployment it indexes, so none of its markets has an event before the floor; these remain the
+consequences if that floor is raised further.
 
 **Farmenta addresses.** None is written in code: deployed addresses are network-specific, and
 a fork or redeploy moves all of them. Copy `deployments/example.json` to
