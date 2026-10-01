@@ -3,26 +3,19 @@
 [Ponder](https://ponder.sh) indexer for Farmenta — borrow USDG against Uniswap v4 LP position
 NFTs on Robinhood Chain (chain id 4663).
 
-Specification: [`farmenta-defi/docs`](https://github.com/farmenta-defi/docs) →
-`ARCHITECTURE.md` §13. **The spec is the source of truth.**
+Public protocol and indexer documentation: [Farmenta technical documentation](https://docs.farmenta.fun/), including the [indexer data reference](https://docs.farmenta.fun/docs/reference/indexer) and [event reference](https://docs.farmenta.fun/docs/reference/events). This README describes how to run and operate this repository; the public reference describes the data model and API.
 
-The indexer records what happened on chain and nothing else. `PositionManager` has no
-`ERC721Enumerable` and `FarmentaMarket` keeps no list of loans, so the list of active loans
-only exists here, rebuilt from events. It does **not** compute health factors: HF moves with
-every price tick without any event, and belongs to the backend and keeper. Two narrowly scoped
-reads recover PoolKeys and deposited positions whose creating events predate the production
-start block. PoolKeys are read at `latest` because they never change; position state is read at
-the deposit block because liquidity changes (FAR-82).
+The indexer is an event logbook: it records on-chain events and does not compute current values such as debt or health factors. The public [indexer reference](https://docs.farmenta.fun/docs/reference/indexer) describes the data model and API. This implementation makes two narrowly scoped contract reads to recover PoolKeys and deposited positions whose creating events predate the configured start block. `PositionManager` has no `ERC721Enumerable`, and `FarmentaMarket` keeps no list of loans, so the list of active loans exists only here, rebuilt from events. PoolKeys are read at `latest` because they never change; position state is read at the deposit block because liquidity changes.
 
-> **Status: pools and listings (FAR-34); positions, loans, liquidations and vault activity
-> (FAR-35).** Exact debt and HF are not here and cannot be: see [Loans](#loans).
+> This indexer records pools and listings, positions, loans, liquidations and vault activity.
+> Exact debt and health factors are not stored here; see [Loans](#loans).
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `ponder.config.ts` | Chain, RPC, database, contracts and start blocks |
-| `config/uniswap.ts` | Uniswap v4 addresses (verbatim from spec §18) and their deploy blocks |
+| `config/uniswap.ts` | Uniswap v4 addresses and their deployment blocks |
 | `config/deployment.ts`, `deployments/` | Farmenta addresses, one JSON file per deployment |
 | `abis/` | Event ABIs, **generated** — see [Regenerating ABIs](#regenerating-abis) |
 | `abis/source.json` | The `smart-contract` commit the ABIs were built from |
@@ -31,7 +24,7 @@ the deposit block because liquidity changes (FAR-82).
 | `src/handlers/` | What those functions do. Only PoolListed and CollateralDeposited receive the chain client; `pnpm test` runs handlers against an in-memory store |
 | `src/lib/` | Pure helpers (pool id, LT ramp, API view), unit-tested without Ponder |
 | `src/api/app.ts`, `src/api/index.ts` | HTTP routes on top of Ponder's built-in ones — see [Queries](#queries). `app.ts` holds the routes and takes the store as an argument, so `pnpm test` runs them against an in-memory Postgres; `index.ts` hands it Ponder's |
-| `test/fixtures/` | Real logs of fixture positions (spec §14, §18), replayed by `test/realPositions.test.ts` |
+| `test/fixtures/` | Real position logs, replayed by `test/realPositions.test.ts` |
 | `scripts/create-db-role.sql` | Database and role on the shared Postgres server |
 | `patches/` | The one change made to Ponder itself, applied by `pnpm install`: see [Ponder patch](#ponder-patch) |
 | `ecosystem.config.cjs` | pm2 process file |
@@ -65,10 +58,10 @@ until `POSTGRES_PASSWORD` is set in `.env`.
 lp-monitor-v2 URL fails at startup instead of writing into `lpmon`.
 
 **RPC.** `PONDER_RPC_URL` is required and has no fallback. Production follows the chain on the
-public RPC (spec v2.07). `START_BLOCK_FLOOR=77197166` is the first block of the Farmenta
-deployment of 1 Oct 2026 (spec §18.2; the deployment it replaced started at 74,901,824);
+public RPC endpoint. `START_BLOCK_FLOOR=77197166` is the first block of the Farmenta
+deployment of 1 Oct 2026 (the deployment it replaced started at 74,901,824);
 the floor was chosen because starting Uniswap history at block 9,070 was estimated to take
-about 60 days. Since FAR-84, the public RPC follows the chain at a measured 1.06 requests per
+about 60 days. The public RPC has been measured to follow the chain at 1.06 requests per
 block; the floor keeps the initial backfill tractable. Locally, leave the floor unset for full
 history or set it to a recent block to test current events.
 
@@ -109,7 +102,8 @@ used unedited. With `FARMENTA_DEPLOYMENT` empty only the Uniswap contracts are i
 `CollateralWithdrawn` or share burn for something deposited before it stops the indexer.
 
 Time is always `block.timestamp`. On this chain `block.number` inside a contract is the L1
-block (Arbitrum Orbit, spec §14), so nothing here derives time from block numbers.
+Ethereum L1 block, so nothing here derives time from block numbers. See the public [Robinhood Chain
+reference](https://docs.farmenta.fun/docs/reference/network).
 
 ## Tables
 
@@ -124,7 +118,7 @@ caches the reads in its sync store.
 | `pool` | CollateralPolicy events; reads PoolKey on `PoolListed` if its `Initialize` predates the range | Listed pools only: key, tier, terms in force, `frozen`, current ramp. `id` is the frontend's `marketId` |
 | `pool_terms_change` | `PoolListed`, `PoolTermsUpdated` | Every set of terms a pool has had |
 | `lt_ramp` | `LtRampScheduled` | Every ramp ever scheduled |
-| `token`, `hook` | `TokenConfigured`, `HookAllowlisted` | Latest config per currency and per hook (owner console, FAR-41) |
+| `token`, `hook` | `TokenConfigured`, `HookAllowlisted` | Latest config per currency and per hook (owner console) |
 | `twap_observation` | TwapRecorder `Recorded` | One row per observation, keyed by pool and timestamp |
 | `twap_pool` | `Recorded` | Newest observation per pool: `last_observation_at` |
 | `position` | PositionManager `Transfer`, PoolManager `ModifyLiquidity`; reads position state on `CollateralDeposited` if its mint predates the range | Observed positions and older positions deposited as collateral: holder, pool, ticks, liquidity, `burned` |
@@ -148,12 +142,12 @@ A pool's first observation has `index 0` and `tickCumulative 0`. That is the rec
 initializing the pool, not broken data. `record` is permissionless, so `twap_pool` may hold
 pools that are not listed.
 
-The effective LT is **not** a column: during a ramp it depends on the time it is read at
-(spec §6.5). `updateTerms` clears the ramp on `pool`; the cleared schedule stays in `lt_ramp`.
+The effective LT is **not** a column: during a ramp it depends on the time it is read at.
+`updateTerms` clears the ramp on `pool`; the cleared schedule stays in `lt_ramp`.
 
 ### Positions
 
-`PositionManager` has no `ERC721Enumerable` (spec §12). Within the indexed range, the
+`PositionManager` has no `ERC721Enumerable`. Within the indexed range, the
 PositionManager's `Transfer` and PoolManager's `ModifyLiquidity` events provide position
 history. A position first deposited as collateral after the range starts may have been minted
 earlier, so `CollateralDeposited` reads its pool, ticks and liquidity at that event's block and
@@ -173,7 +167,7 @@ unknown.
 The market keeps no list of loans on chain, so `loan` is the only one. A row is a position in
 custody of one market; `status` is `in_custody`, `withdrawn` or `liquidated`. A position leaves
 custody in exactly two ways: the depositor withdraws it, or a full liquidation burns it, and
-the `Liquidate` with `fullSeizure` set is what closes the loan, not the burn (FAR-51). A redeposit starts the row over,
+the `Liquidate` with `fullSeizure` set is what closes the loan, not the burn. A redeposit starts the row over,
 as the contract deletes the loan on withdrawal; the earlier custody stays in `loan_activity`.
 
 **`loan` and `/loans?owner=` hold the current or the last custody only.** When Alice withdraws a
@@ -185,14 +179,12 @@ their `owner` in `liquidation`.
 
 **There is no debt column, and `everBorrowed` is not "has debt".** `Borrow` and `Repay` carry
 USDG amounts, not shares, and interest accrues without an event, so exact debt cannot be
-rebuilt from events (SOT v0.30). `everBorrowed` marks a *candidate*: it stays true after the
-loan is repaid in full. The backend (FAR-38) and the keeper (FAR-19) **must** confirm every
-candidate with `debtOf(tokenId)`. `borrowedUsdg`, `repaidUsdg` and `liquidatedUsdg` are running
-totals of event amounts for the current custody; their difference is not the debt.
+rebuilt from events. `everBorrowed` marks a *candidate*: it stays true after the loan is repaid in full. Consumers **must** confirm every candidate with `debtOf(tokenId)`.
+`borrowedUsdg`, `repaidUsdg` and `liquidatedUsdg` are running totals of event amounts for the current custody; their difference is not the debt.
 
 **A loan's pool always comes from the market's events; `position` only confirms it.** Every
 event of a loan names its pool (`CollateralDeposited`, `CollateralWithdrawn`, `Borrow`, `Repay`,
-`LiquidityChanged`, `CollectFees`, `Liquidate`; spec §4.1). `loan.poolId` is the one
+`LiquidityChanged`, `CollectFees`, `Liquidate`). `loan.poolId` is the one
 `CollateralDeposited` named, and `liquidation.poolId` the one `Liquidate` named; neither is ever
 null. The indexer **stops** when a deposit names another pool than the `position` row, which
 would mean the salt-to-tokenId join is wrong, and when any later event names another pool than
@@ -202,18 +194,18 @@ the loan's.
 position's liquidity always comes from the PoolManager's `ModifyLiquidity`, which also sees the
 partial liquidations and the burn that emit no `LiquidityChanged`.
 
-**`collect_fees` rows are the fees each position was paid** (FAR-52). `CollectFees` comes from
+**`collect_fees` rows are the fees each position was paid**. `CollectFees` comes from
 `collectFees` and from the fee claims inside `increaseLiquidity` and `decreaseLiquidity`, and
 `amount0`/`amount1` are the fees the position realised, which the contract reads from its fee
 growth just before the payout, not a balance change of the recipient. Summing a position's rows
 gives the fees it has paid out while in custody, in raw token units; USD values are the
-backend's. Not included: fees realised by a liquidation, partial or full (spec §8), and fees a
+backend's. Not included: fees realised by a liquidation, partial or full, and fees a
 position paid out before it was deposited.
 
 ### Liquidations
 
 `liquidation.full` is `Liquidate.fullSeizure`: true when the position was seized whole and
-burned, with or without bad debt (FAR-51). The PositionManager burn that comes first in the same
+burned, with or without bad debt. The PositionManager burn that comes first in the same
 transaction is held in `pending_burn` until that `Liquidate` confirms it. The indexer **stops**
 when a full-seizure `Liquidate` finds no burn of its position before it in its transaction, when
 a partial one finds a burn waiting, or when a market emits anything in a later transaction while
@@ -245,10 +237,10 @@ time of reading, at `?t=<unix seconds>` (default: now):
 
 | Field | Meaning |
 |---|---|
-| `rampRunning` | `t < rampStart + rampDuration`. True from the moment a ramp is scheduled, which is when the keeper's 60-second wait applies (FAR-19, spec §15 no. 18) |
+| `rampRunning` | `t < rampStart + rampDuration`. True from the moment a ramp is scheduled, which may affect a keeper's configured delay |
 | `rampEndsAt` | `rampStart + rampDuration`, null with no ramp |
 | `effectiveLtBps` | Same arithmetic as `CollateralPolicy.effectiveLt`, truncation included |
-| `lastObservationAt`, `observationAgeSeconds` | Newest TWAP observation and its age at `t`; the alert fires past 600 (spec §13) |
+| `lastObservationAt`, `observationAgeSeconds` | Newest TWAP observation and its age at `t`; the age of the latest observation, in seconds |
 
 ```sh
 $ curl -s "localhost:42069/pools/0x52b9…34f6?t=1789657500" | jq '{effectiveLtBps, rampRunning, observationAgeSeconds}'
@@ -265,8 +257,8 @@ raw columns, so a GraphQL consumer has to apply `effectiveLtBps` (src/lib/ramp.t
 server's time, and the response does not say how far the indexer has got. If the indexer lags,
 `observationAgeSeconds` grows although nothing on chain is stale (a false 600-second alert),
 and `rampRunning` is `false` for a ramp scheduled in a block not indexed yet, so a keeper
-would skip its 60-second wait. The scheduler (FAR-18) and the keeper (FAR-19) should read
-`/status` first and distrust the answer when the lag is past the FAR-36 threshold.
+may act on incomplete state. Consumers that depend on current indexed state should read
+`/status` first and account for indexer lag.
 
 A pool whose `currency0` is null is listed but not initialized yet: nothing can be recorded
 or deposited for it, so treat it as not active.
@@ -279,7 +271,7 @@ Positions and loans:
 | Route | Returns |
 |---|---|
 | `/portfolio/:address` | Not the zero address. `positions`: the NFTs in the address's wallet. `loans`: the ones a market holds for it (`status = in_custody`). `vaultShares`: its `vault_balance` rows, one per market. Meant for users: a market's own address returns every position in its custody, unpaginated |
-| `/loans?owner=&market=&status=` | Loans, every filter optional. One row per market and tokenId, the current or last custody only: a past depositor is found in `loan_activity`, not here. `/loans?status=in_custody` is the list FAR-38 snapshots HF for |
+| `/loans?owner=&market=&status=` | Loans, every filter optional. One row per market and tokenId, the current or last custody only: a past depositor is found in `loan_activity`, not here. `/loans?status=in_custody` is the list consumers use to check current loan state |
 | `/loans/keeper-candidates` | Loans still in custody, on a meme pool (`pool.tier = 2`), that have ever borrowed |
 
 Every loan comes with its position's `tickLower`, `tickUpper` and `liquidity` and its pool's
@@ -297,7 +289,7 @@ in a block not indexed yet is missing, so read `/status` first, as for `/pools`.
 Transfers, activity, liquidations and vault balances are served as stored by `/graphql`.
 
 `uint128` values and timestamps are decimal strings, as in GraphQL. `debtCapUsdg` is USDG
-with 6 decimals; `minPositionUsd` is USD 1e18 (spec §6.5).
+with 6 decimals; `minPositionUsd` is USD scaled by 1e18.
 
 ## Status endpoint
 
@@ -308,14 +300,14 @@ Ponder serves these itself, on `PORT` (default 42069):
 | `/health` | 200 as soon as the process is up |
 | `/ready` | 200 once the backfill has reached head, 503 before |
 | `/status` | Last indexed block and its timestamp, per chain |
+| `/metrics` | Prometheus metrics exposed by Ponder |
 
 ```sh
 $ curl -s localhost:42069/status
 {"robinhood":{"id":4663,"block":{"number":65402474,"timestamp":1789651692}}}
 ```
 
-Indexer lag is `now - block.timestamp`, or the chain head's timestamp minus it. That is what
-the watchdog reads (FAR-36).
+Indexer lag is `now - block.timestamp`, or the chain head's timestamp minus it. Consumers can compare the indexed timestamp with the chain head timestamp to estimate lag.
 
 ## Regenerating ABIs
 
@@ -342,7 +334,7 @@ Commit the pin and the regenerated files together.
 ## Ponder patch
 
 `patches/ponder@0.17.10.patch` raises the floor of Ponder's request limiter, `MIN_RPS`, from 3
-to 15 (FAR-84). `pnpm install` applies it, from `pnpm.patchedDependencies` in `package.json`, to
+to 15. `pnpm install` applies it, from `pnpm.patchedDependencies` in `package.json`, to
 the file that runs (`dist/esm/rpc/index.js`) and to `src/rpc/index.ts`. Never edit
 `node_modules` by hand, on the VPS or anywhere else.
 
@@ -384,7 +376,7 @@ that names the version. Install with `corepack pnpm install --frozen-lockfile`, 
 ## Deploy (VPS, pm2)
 
 The indexer runs on the lp-monitor-v2 VPS and shares its Postgres **server**, but not its
-database: it gets database `farmenta` and its own role (spec §13).
+database: it gets database `farmenta` and its own role.
 
 **1. Database and role — once.** On the VPS, as a Postgres superuser:
 
