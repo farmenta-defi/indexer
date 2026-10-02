@@ -57,8 +57,12 @@ until `POSTGRES_PASSWORD` is set in `.env`.
 `DATABASE_URL` must name database `farmenta`; the config refuses anything else, so a pasted
 lp-monitor-v2 URL fails at startup instead of writing into `lpmon`.
 
-**RPC.** `PONDER_RPC_URL` is required and has no fallback. Production follows the chain on the
-public RPC endpoint. `START_BLOCK_FLOOR=77197166` is the first block of the Farmenta
+**RPC.** `PONDER_RPC_URL` is required and has no fallback. Production follows the chain on
+dRPC since 2 Oct 2026, with `ETH_GET_LOGS_BLOCK_RANGE=100`: dRPC's free plan rejects
+`eth_getLogs` ranges above about 100 blocks with a message Ponder 0.17.10 does not recognise,
+so without the setting the sync fails instead of shrinking the range. Before that it ran on
+the public RPC endpoint, which on 2 Oct 2026 took 1.3 to 1.7 seconds per request and left
+the indexer 50 minutes behind. `START_BLOCK_FLOOR=77197166` is the first block of the Farmenta
 deployment of 1 Oct 2026 (the deployment it replaced started at 74,901,824);
 the floor was chosen because starting Uniswap history at block 9,070 was estimated to take
 about 60 days. The public RPC has been measured to follow the chain at 1.06 requests per

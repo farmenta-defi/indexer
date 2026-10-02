@@ -62,6 +62,9 @@ export default createConfig({
       id: 4663,
       rpc,
       pollingInterval: Number(process.env.POLLING_MS || 2_000),
+      // dRPC rejects eth_getLogs ranges above about 100 blocks with a message Ponder 0.17.10
+      // does not recognise, so the range is set here instead of inferred from the error.
+      ethGetLogsBlockRange: Number(process.env.ETH_GET_LOGS_BLOCK_RANGE) || undefined,
     },
   },
   contracts: {
