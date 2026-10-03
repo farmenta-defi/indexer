@@ -69,6 +69,15 @@ about 60 days. The public RPC has been measured to follow the chain at 1.06 requ
 block; the floor keeps the initial backfill tractable. Locally, leave the floor unset for full
 history or set it to a recent block to test current events.
 
+**RPC cost.** Robinhood Chain makes about 10 blocks a second, and Ponder's realtime sync reads
+every block with `eth_getBlockByNumber`: about 850,000 calls a day, 93% of the indexer's
+traffic. At dRPC's flat $6 per million calls that came to about $5.50 a day. Since 3 Oct 2026
+production sets `PONDER_FREE_RPC_URL` to the public RPC: block reads go there first, and a
+failure, a 429, an answer slower than 3 seconds or a block it has not seen yet goes to
+`PONDER_RPC_URL` (`config/rpc.ts`). Everything else, `eth_getLogs` above all, stays on dRPC.
+Every 10 minutes the indexer logs `rpc split, last 10 min: free=… paid=… (fallback=…)`; `paid`
+is what dRPC bills.
+
 The floor skips Uniswap events before block 77,197,166. In particular, the listed ETH/USDG
 pool `0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551` was initialized at
 block 41,259,014. When `PoolListed` finds no `uniswap_pool` row, it reads

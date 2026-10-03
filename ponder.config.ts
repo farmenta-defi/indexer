@@ -7,6 +7,7 @@ import { poolManagerAbi } from "./abis/PoolManager";
 import { positionManagerAbi } from "./abis/PositionManager";
 import { twapRecorderAbi } from "./abis/TwapRecorder";
 import { loadDeployment } from "./config/deployment";
+import { blocksFromFreeRpc } from "./config/rpc";
 import { UNISWAP } from "./config/uniswap";
 
 // Environment comes from .env, loaded by Node itself (`--env-file`, see package.json and
@@ -21,7 +22,10 @@ function requireEnv(name: string): string {
 
 // Keep the RPC explicit. A full backfill from block 9,070 was estimated to take 60 days on
 // the public RPC, so production uses a start block; live following is supported (FAR-84).
-const rpc = requireEnv("PONDER_RPC_URL");
+const paidRpc = requireEnv("PONDER_RPC_URL");
+// Optional free RPC for block reads only, with PONDER_RPC_URL behind it (config/rpc.ts).
+const freeRpc = process.env.PONDER_FREE_RPC_URL;
+const rpc = freeRpc ? blocksFromFreeRpc(paidRpc, freeRpc) : paidRpc;
 
 // The production floor is the first Farmenta deployment block (FAR-82). Missing historical
 // pool keys and deposited positions are recovered by their event handlers.
